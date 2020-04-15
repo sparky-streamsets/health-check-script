@@ -37,8 +37,108 @@ echo -e "$S"
 echo -e "\tSystem Health Status"
 echo -e "$S"
 
+#--------Start Sparky Mods for StreamSets---------#
+helpFunction()
+{
+    echo ""
+    echo "Usage: $0 -h -o svcacct -p pid -n"
+    echo -e "\t-h print this help message and exit"
+    echo -e "\t-o optional name of service account running StreamSets (default: sdc)"
+    echo -e "\t-p optional process id. Set when more than one StreamSets service is running"
+    echo -e "\t-n set this to turn off certain warnings for non-production environments"
+    exit 1 # Exit script after printing help
+}
+
+while getopts "o:p:nh" opt; do
+    case "$opt" in
+        o ) OWNER="$OPTARG" ;;
+        p ) PID="$OPTARG" ;;
+        n ) NONPROD="true" ;;
+        h ) helpFunction ;; # Print helpFunction in case parameter is non-existent
+    esac
+done
+
+if [ -z $OWNER ]; then
+    OWNER="sdc"
+fi
+
+echo -e "\n\nStart StreamSets-specific checks"
+echo -e "$D$D"
+if [ -z $PID ]; then
+    STREAMSETS_SDC_XMX="$(ps -f -u $OWNER | grep -Eo 'Xmx[[:digit:]]+(k|K|m|M|g|G|[[:space:]])' | sed 's/Xmx//g')"
+else
+    STREAMSETS_SDC_XMX="$(ps -f -p $PID | grep -Eo 'Xmx[[:digit:]]+(k|K|m|M|g|G|[[:space:]])' | sed 's/Xmx//g')"
+fi
+MULTIPLE=1
+if [[ "$STREAMSETS_SDC_XMX" =~ (k|K)$ ]]; then
+    MULTIPLE=2**10
+elif [[ "$STREAMSETS_SDC_XMX" =~ (m|M)$ ]]; then
+    MULTIPLE=2**20
+elif [[ "$STREAMSETS_SDC_XMX" =~ (g|G)$ ]]; then
+    MULTIPLE=2**30
+fi
+STREAMSETS_SDC_RAW_XMX="$(echo $STREAMSETS_SDC_XMX | tr -d '[:space:]' | tr -d '[:alpha:]')"
+STREAMSETS_SDC_RAW_XMX=$(echo $((STREAMSETS_SDC_RAW_XMX * MULTIPLE)))
+
+if [ -z $PID ]; then
+    STREAMSETS_SDC_XMS="$(ps -f -u $OWNER | grep -Eo 'Xms[[:digit:]]+(k|K|m|M|g|G|[[:space:]])' | sed 's/Xms//g')"
+else
+    STREAMSETS_SDC_XMS="$(ps -f -p $PID | grep -Eo 'Xmx[[:digit:]]+(k|K|m|M|g|G|[[:space:]])' | sed 's/Xmx//g')"
+fi
+MULTIPLE=1
+if [[ "$STREAMSETS_SDC_XMS" =~ (k|K)$ ]]; then
+    MULTIPLE=2**10
+elif [[ "$STREAMSETS_SDC_XMS" =~ (m|M)$ ]]; then
+    MULTIPLE=2**20
+elif [[ "$STREAMSETS_SDC_XMS" =~ (g|G)$ ]]; then
+    MULTIPLE=2**30
+fi
+STREAMSETS_SDC_RAW_XMS="$(echo $STREAMSETS_SDC_XMS | tr -d '[:space:]' | tr -d '[:alpha:]')"
+STREAMSETS_SDC_RAW_XMS=$(echo $((STREAMSETS_SDC_RAW_XMS * MULTIPLE)))
+
+if [ $STREAMSETS_SDC_RAW_XMS -ne $STREAMSETS_SDC_RAW_XMX ]; then
+    echo -e "\nStreamSets recommends following the industry-standard best practice of setting the"
+    echo -e "\ninitial and maximum heap sizes to the same value."
+    echo -e "\nCurrent Xms: $STREAMSETS_SDC_XMS    Current Xmx: $STREAMSETS_SDC_XMX  $WCOLOR"
+else
+    echo -e "\nCurrent Initial and Maximum heap sizes match. Current Xms: $STREAMSETS_SDC_XMS   \
+Current Xmx: $STREAMSETS_SDC_XMX  $GCOLOR"
+fi
+
+if [ $STREAMSETS_SDC_RAW_XMX -lt 8589934592 ]; then
+    echo -e "\nStreamSets recommends at least 8 GB of heap memory available for both production and non-production"
+    echo -e "environments: Current Xmx: $STREAMSETS_SDC_XMX  $CCOLOR" 
+elif [[ $STREAMSETS_SDC_RAW_XMX -lt 17179869184 && -z "$NONPROD" ]]; then
+    echo -e "\nStreamSets recommends at least 16 GB of heap memory available for production environments."
+    echo -e "To suppress this warning in the future, set the -n flag. Current Xmx: $STREAMSETS_SDC_XMX  $WCOLOR"
+else
+    echo -e "\nSufficient memory is available to run StreamSets. Current Xmx: $STREAMSETS_SDC_XMX  $GCOLOR"
+fi
+
+if [ $STREAMSETS_SDC_RAW_XMX -ge 68719476736 ]; then
+    echo -e "\nStreamSets recommends no more than 64 GB of heap memory be available. Requiring more memory is often an"
+    echo -e "indicator that the SDC has reached its carrying capacity. Current Xmx: $STREAMSETS_SDC_XMX  $CCOLOR" 
+else
+    echo -e "\nAvailable memory is not excessive (i.e. > 64 GB). Current Xmx: $STREAMSETS_SDC_XMX  $GCOLOR"
+fi
+
+SYSMEM="$(awk '/MemFree/ { printf "%.0f \n", $2*1024 }' /proc/meminfo)"
+SYSMEM_IN_GB="$(awk '/MemFree/ { printf "%.0f \n", $2/1024/1024 }' /proc/meminfo)"
+PCT_OF_SYSMEM="$(echo $STREAMSETS_SDC_RAW_XMX/$SYSMEM |bc -l)"
+PCT_OF_SYSMEM=$(echo $PCT_OF_SYSMEM*100 | bc -l)
+PCT_OF_SYSMEM=$(printf %0.f $PCT_OF_SYSMEM)
+if [ $PCT_OF_SYSMEM -gt 75 ]; then
+    echo -e "\nStreamSets recommends that the heap size setting be no larger than 75% of the available system memory."
+    echo -e "Current Xmx: $STREAMSETS_SDC_XMX   Total system memory: ${SYSMEM_IN_GB}g  $WCOLOR"
+else
+    echo -e "\nAvailable heap memory is below 75% of total system memory."
+    echo -e "Current Xmx: $STREAMSETS_SDC_XMX   Total system memory: ${SYSMEM_IN_GB}g  $GCOLOR"
+fi
+
+#-------End Sparky Mods for StreamSets--------#
+
 #--------Print Operating System Details--------#
-echo -e "\nPrint Operating System Details"
+echo -e "\n\nPrint Operating System Details"
 echo -e "$D"
 
 hostname -f &> /dev/null && printf "Hostname : $(hostname -f)" || printf "Hostname : $(hostname -s)"
