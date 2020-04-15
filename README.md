@@ -12,10 +12,10 @@ Usage:
 
 ./health-check.sh [-h][-u useracct][-p pid][-n]
 
--u user account running StreamSets Data Collector (default: sdc)
--p specific process id to evaluate (use when you either have more than one SDC or SDC and Transformer running on the same machine)
--n turns off checks for production systems
--h prints this usage and exits
+-u user account running StreamSets Data Collector (default: sdc)  
+-p specific process id to evaluate (use when you either have more than one SDC or SDC and Transformer running on the same machine)  
+-n turns off checks for production systems  
+-h prints this usage and exits  
 
 For more details check the below web link :-
 https://www.simplylinuxfaq.com/2015/05/How-To-Check-Health-Status-Of-Linux-System.html
