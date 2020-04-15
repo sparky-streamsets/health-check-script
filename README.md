@@ -14,7 +14,7 @@ Usage:
 
 -u user account running StreamSets Data Collector (default: sdc)  
 -p specific process id to evaluate (use when you either have more than one SDC or SDC and Transformer running on the same machine)  
--n turns off checks for production systems  
+-n turns off some checks for non-production systems  
 -h prints this usage and exits  
 
 For more details check the below web link :-
