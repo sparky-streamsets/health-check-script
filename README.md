@@ -1,14 +1,23 @@
-------""------- How To Check Health Status Of A Linux System ------""------- 
+ ------""------- Linux System Health Check with StreamSets Enhancements ------""------- 
 
-Get Your System Health Status Tested/Checked Today... ????
+Here is a script to check the basic health status of a linux system with enhancements to check whether the system is in alignment with StreamSets best practice recommendations.
 
-Here is a script to check the basic health status of a linux system.
-
-This script has been tested to run successfully on RHEL8(beta)/7/6/5.x, Cent OS, SLES/SLED 12/11, Ubuntu 18/16/14 x86 and x86_64 bit architectures. It may work on other variants as well, however, not tested. These tests were run on virtual machines.
+This script has been tested to run successfully on Amazon Linux. It may work on other variants as well, however, these have not been tested. These tests were run on virtual machines.
 
 This is a small, light weight script which makes use of native Linux utilities to get the required details and doesn't need much space.
+
+v0.1 - Tests memory settings of StreamSets Data Collector
+
+Usage:
+
+./health-check.sh [-h][-u useracct][-p pid][-n]
+
+-u user account running StreamSets Data Collector (default: sdc)
+-p specific process id to evaluate (use when you either have more than one SDC or SDC and Transformer running on the same machine)
+-n turns off checks for production systems
+-h prints this usage and exits
 
 For more details check the below web link :-
 https://www.simplylinuxfaq.com/2015/05/How-To-Check-Health-Status-Of-Linux-System.html
 
-                                                                    Updated on : 30-Dec-2018
+                                                                    Updated on : 15-Apr-2020
