@@ -1,14 +1,12 @@
 #!/bin/bash
-##---------- Author : Sadashiva Murthy M ----------------------------------------------------##
-##---------- Blog site : https://www.simplylinuxfaq.com -------------------------------------##
-##---------- Github page : https://github.com/SimplyLinuxFAQ/health-check-script ------------##
-##---------- Purpose : To quickly check and report health status in a linux system.----------##
-##---------- Tested on : RHEL8(beta)/7/6/5/, SLES/SLED 12/11, Ubuntu14/16/18, Mint16, -------## 
-##---------- Boss6(Debian) variants. It may work on other vari as well, but not tested. -----##
-##---------- Updated version : v2.0 (Updated on 30th Dec 2018) ------------------------------##
-##-----NOTE: This script requires root privileges, otherwise one could run the script -------##
-##---- as a sudo user who got root privileges. ----------------------------------------------##
-##----------- "sudo /bin/bash <ScriptName>" -------------------------------------------------##
+##========== Original author : Sadashiva Murthy M ===========================================##
+##========== Github page : https://github.com/streamsets/health-check-script ================##
+##========== Purpose : To to ensure host settings match StreamSets best practices  ==========##
+##========== Tested on : RHEL8(beta)/7/6/5/, SLES/SLED 12/11, Ubuntu14/16/18, Mint16, =======## 
+##========== Boss6(Debian) variants. It may work on others, but they have not been tested. ==##
+##========== Updated version : v0.3 (Updated on 23 Apr 2020) ================================##
+##========== NOTE: This script requires either root or sudo privileges ======================##
+##========== "sudo /bin/bash health-check.sh" ===============================================##
 
 #------variables used------#
 S="************************************"
@@ -37,12 +35,12 @@ echo -e "$S"
 echo -e "\tSystem Health Status"
 echo -e "$S"
 
-#--------Start Sparky Mods for StreamSets---------#
+#=================================== HelpFunction ===================================#
 HelpFunction()
 {
     echo ""
     echo "Usage:$0 (-h|--help) (-u|--user) <svcacct> (-p|--process) <pid> --exclude <functionlist> --include <functionlist> -n"
-    echo -e "\n\n\tAvailable functions: StreamsetsChecks,PrintOSDetails,PrintSystemUptime,FindReadOnlyFileSystems,"
+    echo -e "\n\n\tAvailable functions: ServiceChecks,PrintOSDetails,PrintSystemUptime,FindReadOnlyFileSystems,"
     echo -e "\tFindCurrentlyMountedFileSystems,CheckDiskUsage,FindZombieProcesses,CheckInodeUsage,CheckSwapUtilization,"
     echo -e "\tCheckProcessorUtilization,CheckLoadAverage,CheckMostRecentReboots,CheckShutdownEvents,"
     echo -e "\tCheckTopFiveMemoryConsumers,CheckTopFiveCPUConsumers"
@@ -56,6 +54,7 @@ HelpFunction()
     exit 1 # Exit script after printing help
 }
 
+#=================================== Process Options ===================================#
 TEMP_OPTS=`getopt -u -o u:p:nhx:i: -l help,no-prod,user:,pid:,exclude:,include: -n 'health-check' -- "$@"`
 
 if [ $? != 0 ]; then echo "Terminating..." >&2; exit 1; fi
@@ -63,7 +62,7 @@ if [ $? != 0 ]; then echo "Terminating..." >&2; exit 1; fi
 eval set -- "$TEMP_OPTS"
 
 OWNER="sdc"
-FUNCTIONS_TO_RUN='StreamsetsChecks,PrintOSDetails,PrintSystemUptime,FindReadOnlyFileSystems,FindCurrentlyMountedFileSystems,CheckDiskUsage,FindZombieProcesses,CheckInodeUsage,CheckSwapUtilization,CheckProcessorUtilization,CheckLoadAverage,CheckMostRecentReboots,CheckShutdownEvents,CheckTopFiveMemoryConsumers,CheckTopFiveCPUConsumers'
+FUNCTIONS_TO_RUN='ServiceChecks,PrintOSDetails,PrintSystemUptime,FindReadOnlyFileSystems,FindCurrentlyMountedFileSystems,CheckDiskUsage,FindZombieProcesses,CheckInodeUsage,CheckSwapUtilization,CheckProcessorUtilization,CheckLoadAverage,CheckMostRecentReboots,CheckShutdownEvents,CheckTopFiveMemoryConsumers,CheckTopFiveCPUConsumers'
 FUNCTIONS_TO_SKIP=''
 while true; do
     case "$1" in
@@ -84,11 +83,9 @@ if [ $FUNCTIONS_TO_SKIP!='' ]; then
     done
 fi
 
-StreamsetsChecks()
-{
-    echo -e "\n\nStart StreamSets-specific checks"
-    echo -e "$D$D"
-    
+#=================================== ServiceChecks ===================================#
+ServiceChecks()
+{   
     CheckForBCFunction
     StreamSetsCalcMemorySettings
     StreamSetsCheckMemorySettingsMatch
@@ -97,6 +94,7 @@ StreamsetsChecks()
     StreamSetsCheckPctOfSysMemory
 }
 
+#=================================== Check to see if bc function is present ===================================#
 CheckForBCFunction()
 {
    if ! type bc &> /dev/null; then
@@ -107,6 +105,7 @@ CheckForBCFunction()
 	fi
 }
 
+#=================================== Pre-calc memory settings ===================================#
 StreamSetsCalcMemorySettings()
 {
     if [ -z $PID ]; then
@@ -142,6 +141,7 @@ StreamSetsCalcMemorySettings()
     STREAMSETS_SDC_RAW_XMS=$(echo $((STREAMSETS_SDC_RAW_XMS * MULTIPLE)))
 }
 
+#=================================== Check initial and heap sizes match ===================================#
 StreamSetsCheckMemorySettingsMatch()
 {
     if [ $STREAMSETS_SDC_RAW_XMS -ne $STREAMSETS_SDC_RAW_XMX ]; then
@@ -154,6 +154,7 @@ Current Xmx: $STREAMSETS_SDC_XMX  $GCOLOR"
     fi
 }
 
+#=================================== Check current against min recommended memory ===================================#
 StreamSetsCheckMinMemory()
 {
     if [ $STREAMSETS_SDC_RAW_XMX -lt 8589934592 ]; then
@@ -167,6 +168,7 @@ StreamSetsCheckMinMemory()
     fi
 }
 
+#=================================== Check current against max recommended memory ===================================#
 StreamSetsCheckMaxMemory()
 {
     if [ $STREAMSETS_SDC_RAW_XMX -ge 68719476736 ]; then
@@ -177,6 +179,7 @@ StreamSetsCheckMaxMemory()
     fi
 }
 
+#=================================== Check % of memory used by StreamSets ===================================#
 StreamSetsCheckPctOfSysMemory()
 {
     SYSMEM="$(awk '/MemFree/ { printf "%.0f \n", $2*1024 }' /proc/meminfo)"
@@ -192,9 +195,8 @@ StreamSetsCheckPctOfSysMemory()
         echo -e "Current Xmx: $STREAMSETS_SDC_XMX   Total system memory: ${SYSMEM_IN_GB}g  $GCOLOR"
     fi
 }
-#-------End Sparky Mods for StreamSets--------#
 
-#--------Print Operating System Details--------#
+#=================================== Print Operating System Details ===================================#
 PrintOSDetails()
 {
     echo -e "\n\nPrint Operating System Details"
@@ -210,7 +212,7 @@ PrintOSDetails()
     printf "OS Architecture : "$(arch | grep x86_64 &> /dev/null) && printf " 64 Bit OS\n"  || printf " 32 Bit OS\n"
 }
 
-#--------Print system uptime-------#
+#=================================== Print system uptime ===================================#
 PrintSystemUptime()
 {
     UPTIME=$(uptime)
@@ -225,7 +227,7 @@ PrintSystemUptime()
     echo -e "Current System Date & Time : "$(date +%c)
 }
         
-#--------Check for any read-only file systems--------#
+#=================================== Check for any read-only file systems ===================================#
 FindReadOnlyFileSystems()
 {
     echo -e "\nChecking For Read-only File System[s]"
@@ -233,7 +235,7 @@ FindReadOnlyFileSystems()
     echo "$MOUNT"|grep -w \(ro\) && echo -e "\n.....Read Only file system[s] found"|| echo -e ".....No read-only file system[s] found. "
 }
 
-#--------Check for currently mounted file systems--------#
+#=================================== Check for currently mounted file systems ===================================#
 FindCurrentlyMountedFileSystems()
 {
     echo -e "\n\nChecking For Currently Mounted File System[s]"
@@ -241,7 +243,7 @@ FindCurrentlyMountedFileSystems()
     echo "$MOUNT"|column -t
 }
 
-#--------Check disk usage on all mounted file systems--------#
+#=================================== Check disk usage on all mounted file systems ===================================#
 CheckDiskUsage()
 {
     echo -e "\n\nChecking For Disk Usage On Mounted File System[s]"
@@ -268,7 +270,7 @@ CheckDiskUsage()
     paste  <(echo "$COL1") <(echo "$COL3") -d' '|column -t
 }
 
-#--------Check for any zombie processes--------#
+#=================================== Check for any zombie processes ===================================#
 FindZombieProcesses()
 {
     echo -e "\n\nChecking For Zombie Processes"
@@ -287,7 +289,7 @@ FindZombieProcesses()
     fi
 }
 
-#--------Check Inode usage--------#
+#=================================== Check Inode usage ===================================#
 CheckInodeUsage()
 {
     echo -e "\n\nChecking For INode Usage"
@@ -321,7 +323,7 @@ CheckInodeUsage()
     paste  <(echo "$COL11") <(echo "$COL33") -d' '|column -t
 }
 
-#--------Check for SWAP Utilization--------#
+#=================================== Check for SWAP Utilization ===================================#
 CheckSwapUtilization()
 {
     echo -e "\n\nChecking SWAP Details"
@@ -332,7 +334,7 @@ CheckSwapUtilization()
     $(grep -w SwapFree /proc/meminfo|awk '{print $2/1024/1024}')
 }
 
-#--------Check for Processor Utilization (current data)--------#
+#=================================== Check for Processor Utilization (current data) ===================================#
 CheckProcessorUtilization()
 {
     echo -e "\n\nChecking For Processor Utilization"
@@ -341,7 +343,7 @@ CheckProcessorUtilization()
     mpstat|tail -2
 }
 
-#--------Check for load average (current data)--------#
+#=================================== Check for load average (current data) ===================================#
 CheckLoadAverage()
 {
     echo -e "\n\nChecking For Load Average"
@@ -349,7 +351,7 @@ CheckLoadAverage()
     echo -e "Current Load Average : $(uptime|grep -o "load average.*"|awk '{print $3" " $4" " $5}')"
 }
 
-#------Print most recent 3 reboot events if available----#
+#=================================== Print most recent 3 reboot events if available ===================================#
 CheckMostRecentReboots()
 {
     echo -e "\n\nMost Recent 3 Reboot Events"
@@ -358,7 +360,7 @@ CheckMostRecentReboots()
     echo -e "No reboot events are recorded."
 }
 
-#------Print most recent 3 shutdown events if available-----#
+#=================================== Print most recent 3 shutdown events if available ===================================#
 CheckShutdownEvents()
 {
     echo -e "\n\nMost Recent 3 Shutdown Events"
@@ -367,7 +369,7 @@ CheckShutdownEvents()
     echo -e "No shutdown events are recorded."
 }
 
-#--------Print top 5 most memory consuming resources---------#
+#=================================== Print top 5 most memory consuming resources ===================================#
 CheckTopFiveMemoryConsumers()
 {
     echo -e "\n\nTop 5 Memory Resource Hog Processes"
@@ -375,7 +377,7 @@ CheckTopFiveMemoryConsumers()
     ps -eo pmem,pcpu,pid,ppid,user,stat,args | sort -k 1 -r | head -6|sed 's/$/\n/'
 }
 
-#--------Print top 5 most CPU consuming resources---------#
+#=================================== Print top 5 most CPU consuming resources ===================================#
 CheckTopFiveCPUConsumers()
 {
     echo -e "\n\nTop 5 CPU Resource Hog Processes"
@@ -383,14 +385,9 @@ CheckTopFiveCPUConsumers()
     ps -eo pcpu,pmem,pid,ppid,user,stat,args | sort -k 1 -r | head -6|sed 's/$/\n/'
 }
 
-#--------Execute functions in FUNCTIONS_TO_RUN variable--------#
+#=================================== Execute functions in FUNCTIONS_TO_RUN variable ===================================#
 for func in $(echo $FUNCTIONS_TO_RUN | sed "s/,/ /g"); do
     ${func}
 done
 
-echo -e "NOTE:- If any of the above fields are marked as \"blank\" or \"NONE\" or \"UNKNOWN\" or \"Not Available\" or \"Not Specified\"
-that means either there is no value present in the system for these fields, otherwise that value may not be available,
-or suppressed since there was an error in fetching details."
-echo -e "\n\t\t %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%"
-echo -e "\t\t   <>--------<> Powered By : https://www.simplylinuxfaq.com <>--------<>"
-echo -e "\t\t %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%"
+#=================================== End of Script ===================================#
