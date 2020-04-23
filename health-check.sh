@@ -41,32 +41,42 @@ echo -e "$S"
 HelpFunction()
 {
     echo ""
-    echo "Usage:<FUNCTIONS_TO_RUN=(comma-separated list of functions) | FUNCTIONS_TO_SKIP=(comma-separated list of functions)> $0 -h -o svcacct -p pid -n"
-    echo "Available functions: StreamsetsChecks,PrintOSDetails,PrintSystemUptime,FindReadOnlyFileSystems,FindCurrentlyMountedFileSystems,CheckDiskUsage,"
-    echo "FindZombieProcesses,CheckInodeUsage,CheckSwapUtilization,CheckProcessorUtilization,CheckLoadAverage,CheckMostRecentReboots,"
-    echo "CheckShutdownEvents,CheckTopFiveMemoryConsumers,CheckTopFiveCPUConsumers"
-    echo -e "\n\t-h print this help message and exit"
-    echo -e "\t-o optional name of service account running StreamSets (default: sdc)"
-    echo -e "\t-p optional process id. Set when more than one StreamSets service is running"
-    echo -e "\t-n set this to turn off certain warnings for non-production environments"
+    echo "Usage:$0 (-h|--help) (-u|--user) <svcacct> (-p|--process) <pid> --exclude <functionlist> --include <functionlist> -n"
+    echo -e "\n\n\tAvailable functions: StreamsetsChecks,PrintOSDetails,PrintSystemUptime,FindReadOnlyFileSystems,"
+    echo -e "\tFindCurrentlyMountedFileSystems,CheckDiskUsage,FindZombieProcesses,CheckInodeUsage,CheckSwapUtilization,"
+    echo -e "\tCheckProcessorUtilization,CheckLoadAverage,CheckMostRecentReboots,CheckShutdownEvents,"
+    echo -e "\tCheckTopFiveMemoryConsumers,CheckTopFiveCPUConsumers"
+    echo -e "\n\nOptions:"
+    echo -e "\t-h | --help                        print this help message and exit"
+    echo -e "\t-u | --user <uid>                  optional name of service account running StreamSets as a service (default: sdc)"
+    echo -e "\t-p | --pid <pid>                   optional process id. Set when using more than one StreamSets process or if not a service"
+    echo -e "\t-n | --no-prod                     set this to turn off certain warnings for non-production environments"
+    echo -e "\t-x | --exclude <functionlist>      comma-separated list of functions not to execute"
+    echo -e "\t-i | --include <functionlist>      comma-separated list of functions to execute (only execute these functions)\n"
     exit 1 # Exit script after printing help
 }
 
-while getopts "o:p:nh" opt; do
-    case "$opt" in
-        o ) OWNER="$OPTARG" ;;
-        p ) PID="$OPTARG" ;;
-        n ) NONPROD="true" ;;
-        h ) HelpFunction ;; # Print helpFunction in case parameter is non-existent
+TEMP_OPTS=`getopt -u -o u:p:nhx:i: -l help,no-prod,user:,pid:,exclude:,include: -n 'health-check' -- "$@"`
+
+if [ $? != 0 ]; then echo "Terminating..." >&2; exit 1; fi
+
+eval set -- "$TEMP_OPTS"
+
+OWNER="sdc"
+FUNCTIONS_TO_RUN='StreamsetsChecks,PrintOSDetails,PrintSystemUptime,FindReadOnlyFileSystems,FindCurrentlyMountedFileSystems,CheckDiskUsage,FindZombieProcesses,CheckInodeUsage,CheckSwapUtilization,CheckProcessorUtilization,CheckLoadAverage,CheckMostRecentReboots,CheckShutdownEvents,CheckTopFiveMemoryConsumers,CheckTopFiveCPUConsumers'
+FUNCTIONS_TO_SKIP=''
+while true; do
+    case "$1" in
+        -u | --user ) OWNER="$2"; shift 2 ;;
+        -p | --pid ) PID="$2"; shift 2 ;;
+        -n | --no-prod ) NONPROD="true"; shift ;;
+        -x | --exclude ) FUNCTIONS_TO_SKIP="$2"; shift 2 ;;
+        -i | --include ) FUNCTIONS_TO_RUN="$2"; shift 2 ;;
+        -h | --help ) HelpFunction ;; # Print helpFunction in case parameter is non-existent
+        -- ) shift; break ;;
+        * ) break ;;
     esac
 done
-
-if [ -z $OWNER ]; then
-    OWNER="sdc"
-fi
-
-FUNCTIONS_TO_RUN=${FUNCTIONS_TO_RUN:-'StreamsetsChecks,PrintOSDetails,PrintSystemUptime,FindReadOnlyFileSystems,FindCurrentlyMountedFileSystems,CheckDiskUsage,FindZombieProcesses,CheckInodeUsage,CheckSwapUtilization,CheckProcessorUtilization,CheckLoadAverage,CheckMostRecentReboots,CheckShutdownEvents,CheckTopFiveMemoryConsumers,CheckTopFiveCPUConsumers'}
-FUNCTIONS_TO_SKIP=${FUNCTIONS_TO_SKIP:-''}
 
 if [ $FUNCTIONS_TO_SKIP!='' ]; then
     for func in $(echo $FUNCTIONS_TO_SKIP | sed "s/,/ /g"); do
