@@ -125,25 +125,12 @@ IUSAGE=$(df -PThi|egrep -iw "ext4|ext3|xfs|gfs|gfs2|btrfs"|grep -v "loop"|sort -
 
 #=================================== ServiceChecks ===================================#
 ServiceChecks()
-{   
-    CheckForBCFunction
+{
     StreamSetsCalcMemorySettings
     StreamSetsCheckMemorySettingsMatch
     StreamSetsCheckMinMemory
     StreamSetsCheckMaxMemory
     StreamSetsCheckPctOfSysMemory
-}
-
-#=================================== Check to see if bc function is present ===================================#
-CheckForBCFunction()
-{
-   if ! type bc &> /dev/null; then
-	   #echo "You need to install the bc command to run the StreamSets-specific system checks"
-	   #echo "On Ubuntu/Debian, run:  sudo apt-get update & sudo apt-get install bc"
-	   #echo "On RHEL/CentOs, run:  sudo yum install bc"
-	   ResultOutput FAIL "This script requires the bc command"
-	   exit 1
-	fi
 }
 
 #=================================== Pre-calc memory settings ===================================#
