@@ -1,45 +1,38 @@
 #!/bin/bash
-##========== Original author : Sadashiva Murthy M ===========================================##
-##========== Github page : https://github.com/streamsets/health-check-script ================##
-##========== Purpose : To to ensure host settings match StreamSets best practices  ==========##
-##========== Tested on : RHEL8(beta)/7/6/5/, SLES/SLED 12/11, Ubuntu14/16/18, Mint16, =======## 
-##========== Boss6(Debian) variants. It may work on others, but they have not been tested. ==##
-##========== Updated version : v0.3 (Updated on 23 Apr 2020) ================================##
-##========== NOTE: This script requires either root or sudo privileges ======================##
-##========== "sudo /bin/bash health-check.sh" ===============================================##
 
-#------variables used------#
+# Set defaults and initialize variables
+declare -a TESTS_ALL 					# Test functions should add their name to this array
+declare -a TESTS_EXCLUDE 			# List of tests that should not be executed
+declare -a TESTS_INCLUDE  		# List of tests that should be excecuted.
+declare -A TESTS_DESCRIPTION  # Description of test.  Indexed by the test name.
+declare -a REQUIRED_PROGRAMS  # Add any dependencies into this array
+TARGET_PRODUCT=all # Can be all, sdc, dpm|sch, transformer|xfm  # Tests can use this to know what configurations to test
+NONPROD=false
+OWNER="sdc"
+
 S="************************************"
 D="-------------------------------------"
 COLOR="y"
 
-MOUNT=$(mount|egrep -iw "ext4|ext3|xfs|gfs|gfs2|btrfs"|grep -v "loop"|sort -u -t' ' -k1,2)
-FS_USAGE=$(df -PTh|egrep -iw "ext4|ext3|xfs|gfs|gfs2|btrfs"|grep -v "loop"|sort -k6n|awk '!seen[$1]++')
-IUSAGE=$(df -PThi|egrep -iw "ext4|ext3|xfs|gfs|gfs2|btrfs"|grep -v "loop"|sort -k6n|awk '!seen[$1]++')
-
+GCOLOR=" [OK  ] "
+WCOLOR=" [WARN] "
+CCOLOR=" [FAIL] "
+ICOLOR=" [INFO] "
 if [ $COLOR == y ]; then
 {
- GCOLOR="\e[47;32m ------ OK/HEALTHY \e[0m"
- WCOLOR="\e[43;31m ------ WARNING \e[0m"
- CCOLOR="\e[47;31m ------ CRITICAL \e[0m"
-}
-else
-{
- GCOLOR=" ------ OK/HEALTHY "
- WCOLOR=" ------ WARNING "
- CCOLOR=" ------ CRITICAL "
+ GCOLOR="\e[47;32m${GCOLOR}\e[0m"
+ WCOLOR="\e[43;31m${WCOLOR}\e[0m"
+ CCOLOR="\e[47;31m${CCOLOR}\e[0m"
 }
 fi
 
-echo -e "$S"
-echo -e "\tSystem Health Status"
-echo -e "$S"
 
-#=================================== HelpFunction ===================================#
-HelpFunction()
+
+#=================================== Base functions ===================================#
+function HelpFunction()
 {
     echo ""
-    echo "Usage:$0 (-h|--help) (-u|--user) <svcacct> (-p|--process) <pid> --exclude <functionlist> --include <functionlist> -n"
+    echo "Usage:$0 (-h|--help) (-u|--user) <svcacct> (-p|--process) <pid> --exclude <functionlist> --include <functionlist> (-n|--no-prod)"
     echo -e "\n\n\tAvailable functions: ServiceChecks,PrintOSDetails,PrintSystemUptime,FindReadOnlyFileSystems,"
     echo -e "\tFindCurrentlyMountedFileSystems,CheckDiskUsage,FindZombieProcesses,CheckInodeUsage,CheckSwapUtilization,"
     echo -e "\tCheckProcessorUtilization,CheckLoadAverage,CheckMostRecentReboots,CheckShutdownEvents,"
@@ -53,35 +46,82 @@ HelpFunction()
     echo -e "\t-i | --include <functionlist>      comma-separated list of functions to execute (only execute these functions)\n"
     exit 1 # Exit script after printing help
 }
+function RegisterTest()
+{
+  # RegisterTest TestFunctionName "Description of the test" "any,programs,this,is,dependent,on"
+  #echo "Registering ${#TESTS_ALL[@]} $1"
+  TESTS_ALL+=($1)
+  [ -n "$2" ] && TESTS_DESCRIPTION[$1]="$2"
+  [ -n "$3" ] && REQUIRED_PROGRAMS+=( $( echo "$3" | sed 's/,/ /g') )
+}
+function ResultOutput
+{
+  # ResultOutput pass_fail_warn_info short_message optional_long_message
+  case "$1" in
+    OK|PASS|0)
+      echo -e "$GCOLOR ${FUNCNAME[1]} $2"
+      ;;
+    ERR|ERROR|FAIL|1)
+      echo -e "$CCOLOR ${FUNCNAME[1]} $2"
+      ;;
+    WARN|2)
+      echo -e "$WCOLOR ${FUNCNAME[1]} $2"
+      ;;
+    *)
+      echo -e "$ICOLOR $2"
+      ;;
+  esac
+}
 
-#=================================== Process Options ===================================#
-TEMP_OPTS=`getopt -u -o u:p:nhx:i: -l help,no-prod,user:,pid:,exclude:,include: -n 'health-check' -- "$@"`
-
-if [ $? != 0 ]; then echo "Terminating..." >&2; exit 1; fi
-
-eval set -- "$TEMP_OPTS"
-
-OWNER="sdc"
-FUNCTIONS_TO_RUN='ServiceChecks,PrintOSDetails,PrintSystemUptime,FindReadOnlyFileSystems,FindCurrentlyMountedFileSystems,CheckDiskUsage,FindZombieProcesses,CheckInodeUsage,CheckSwapUtilization,CheckProcessorUtilization,CheckLoadAverage,CheckMostRecentReboots,CheckShutdownEvents,CheckTopFiveMemoryConsumers,CheckTopFiveCPUConsumers'
-FUNCTIONS_TO_SKIP=''
-while true; do
-    case "$1" in
-        -u | --user ) OWNER="$2"; shift 2 ;;
-        -p | --pid ) PID="$2"; shift 2 ;;
-        -n | --no-prod ) NONPROD="true"; shift ;;
-        -x | --exclude ) FUNCTIONS_TO_SKIP="$2"; shift 2 ;;
-        -i | --include ) FUNCTIONS_TO_RUN="$2"; shift 2 ;;
-        -h | --help ) HelpFunction ;; # Print helpFunction in case parameter is non-existent
-        -- ) shift; break ;;
-        * ) break ;;
-    esac
+unset PARAMS
+while (( "$#" )); do
+  case "$1" in
+    '-?'|-h|--help)
+      HelpFunction
+      exit 0
+      ;;
+    --product)
+      # Specify which StreamSets product this should execute for
+      TARGET_PRODUCT=$2
+      shift 2
+      ;;
+    -u|--user)
+      OWNER=$2
+      shift 2
+      ;;
+    -p|--pid)
+      PID=$2
+      shift 2
+      ;;
+    --exclude)
+      shift 2
+      ;;
+    --include)
+      shift 2
+      ;;
+    -n|--no-prod)
+      NONPROD="true"
+      shift
+      ;;
+    --) # end argument parsing
+      shift
+      break
+      ;;
+    -*|--*=) # unsupported flags
+      echo "Error: Unsupported flag $1" >&2
+      exit 1
+      ;;
+    *) # preserve positional arguments in case we want to use them later (for now we should error)
+      PARAMS="$PARAMS $1"
+      shift
+      ;;
+  esac
 done
 
-if [ $FUNCTIONS_TO_SKIP!='' ]; then
-    for func in $(echo $FUNCTIONS_TO_SKIP | sed "s/,/ /g"); do
-        FUNCTIONS_TO_RUN=$(echo $FUNCTIONS_TO_RUN | sed "s/$func,//g")
-    done
-fi
+#------variables used------#
+MOUNT=$(mount|egrep -iw "ext4|ext3|xfs|gfs|gfs2|btrfs"|grep -v "loop"|sort -u -t' ' -k1,2)
+FS_USAGE=$(df -PTh|egrep -iw "ext4|ext3|xfs|gfs|gfs2|btrfs"|grep -v "loop"|sort -k6n|awk '!seen[$1]++')
+IUSAGE=$(df -PThi|egrep -iw "ext4|ext3|xfs|gfs|gfs2|btrfs"|grep -v "loop"|sort -k6n|awk '!seen[$1]++')
 
 #=================================== ServiceChecks ===================================#
 ServiceChecks()
@@ -98,14 +138,16 @@ ServiceChecks()
 CheckForBCFunction()
 {
    if ! type bc &> /dev/null; then
-	   echo "You need to install the bc command to run the StreamSets-specific system checks"
-	   echo "On Ubuntu/Debian, run:  sudo apt-get update & sudo apt-get install bc"
-	   echo "On RHEL/CentOs, run:  sudo yum install bc"
+	   #echo "You need to install the bc command to run the StreamSets-specific system checks"
+	   #echo "On Ubuntu/Debian, run:  sudo apt-get update & sudo apt-get install bc"
+	   #echo "On RHEL/CentOs, run:  sudo yum install bc"
+	   ResultOutput FAIL "This script requires the bc command"
 	   exit 1
 	fi
 }
 
 #=================================== Pre-calc memory settings ===================================#
+RegisterTest "StreamSetsCalcMemorySettings" "Check that % of memory in use by StreamSets is okay."
 StreamSetsCalcMemorySettings()
 {
     if [ -z $PID ]; then
@@ -142,44 +184,53 @@ StreamSetsCalcMemorySettings()
 }
 
 #=================================== Check initial and heap sizes match ===================================#
+RegisterTest "StreamSetsCheckMemorySettingsMatch" "Checks initial and heap sizes match."
 StreamSetsCheckMemorySettingsMatch()
 {
     if [ $STREAMSETS_SDC_RAW_XMS -ne $STREAMSETS_SDC_RAW_XMX ]; then
-        echo -e "\nStreamSets recommends following the industry-standard best practice of setting the"
-        echo -e "\ninitial and maximum heap sizes to the same value."
-        echo -e "\nCurrent Xms: $STREAMSETS_SDC_XMS    Current Xmx: $STREAMSETS_SDC_XMX  $WCOLOR"
+        ResultOutput WARN "Initial and maximum heap sizes are different.  Current Xms: $STREAMSETS_SDC_XMS    Current Xmx: $STREAMSETS_SDC_XMX"
+        #echo -e "\nStreamSets recommends following the industry-standard best practice of setting the"
+        #echo -e "\ninitial and maximum heap sizes to the same value."
+        #echo -e "\nCurrent Xms: $STREAMSETS_SDC_XMS    Current Xmx: $STREAMSETS_SDC_XMX  $WCOLOR"
     else
-        echo -e "\nCurrent Initial and Maximum heap sizes match. Current Xms: $STREAMSETS_SDC_XMS   \
-Current Xmx: $STREAMSETS_SDC_XMX  $GCOLOR"
+        ResultOutput OK "Current Initial and Maximum heap sizes match. Current Xms: $STREAMSETS_SDC_XMS Current Xmx: $STREAMSETS_SDC_XMX"
     fi
 }
 
 #=================================== Check current against min recommended memory ===================================#
+RegisterTest "StreamSetsCheckMinMemory" "Check current against min recommended memory"
 StreamSetsCheckMinMemory()
 {
     if [ $STREAMSETS_SDC_RAW_XMX -lt 8589934592 ]; then
-        echo -e "\nStreamSets recommends at least 8 GB of heap memory available for both production and non-production"
-        echo -e "environments: Current Xmx: $STREAMSETS_SDC_XMX  $CCOLOR" 
+        ResultOutput FAIL "StreamSets recommends at least 8 GB of heap memory available for both production and non-production.  Current Xmx: $STREAMSETS_SDC_XMX"
+        #echo -e "\nStreamSets recommends at least 8 GB of heap memory available for both production and non-production"
+        #echo -e "environments: Current Xmx: $STREAMSETS_SDC_XMX  $CCOLOR" 
     elif [[ $STREAMSETS_SDC_RAW_XMX -lt 17179869184 && -z "$NONPROD" ]]; then
-        echo -e "\nStreamSets recommends at least 16 GB of heap memory available for production environments."
-        echo -e "To suppress this warning in the future, set the -n flag. Current Xmx: $STREAMSETS_SDC_XMX  $WCOLOR"
+        ResultOutput WARN "StreamSets recommends at least 16 GB of heap memory available for production environments."
+        #echo -e "\nStreamSets recommends at least 16 GB of heap memory available for production environments."
+        #echo -e "To suppress this warning in the future, set the -n flag. Current Xmx: $STREAMSETS_SDC_XMX  $WCOLOR"
     else
-        echo -e "\nSufficient memory is available to run StreamSets. Current Xmx: $STREAMSETS_SDC_XMX  $GCOLOR"
+        ResultOutput INFO "Sufficient memory is available to run StreamSets. Current Xmx: $STREAMSETS_SDC_XMX"
+        #echo -e "\nSufficient memory is available to run StreamSets. Current Xmx: $STREAMSETS_SDC_XMX  $GCOLOR"
     fi
 }
 
 #=================================== Check current against max recommended memory ===================================#
+RegisterTest "StreamSetsCheckMaxMemory" "Check current against max recommended memory"
 StreamSetsCheckMaxMemory()
 {
     if [ $STREAMSETS_SDC_RAW_XMX -ge 68719476736 ]; then
-        echo -e "\nStreamSets recommends no more than 64 GB of heap memory be available. Requiring more memory is often an"
-        echo -e "indicator that the SDC has reached its carrying capacity. Current Xmx: $STREAMSETS_SDC_XMX  $CCOLOR" 
+        ResultOutput ERROR "StreamSets recommends no more than 64 GB of heap memory be available. Current Xmx: $STREAMSETS_SDC_XMX" 
+        #echo -e "\nStreamSets recommends no more than 64 GB of heap memory be available. Requiring more memory is often an"
+        #echo -e "indicator that the SDC has reached its carrying capacity. Current Xmx: $STREAMSETS_SDC_XMX  $CCOLOR" 
     else
-        echo -e "\nAvailable memory is not excessive (i.e. > 64 GB). Current Xmx: $STREAMSETS_SDC_XMX  $GCOLOR"
+        ResultOutput OK "Available memory is not excessive (i.e. > 64 GB). Current Xmx: $STREAMSETS_SDC_XMX" 
+        #echo -e "\nAvailable memory is not excessive (i.e. > 64 GB). Current Xmx: $STREAMSETS_SDC_XMX  $GCOLOR"
     fi
 }
 
 #=================================== Check % of memory used by StreamSets ===================================#
+RegisterTest "StreamSetsCheckPctOfSysMemory" "Check that % of memory in use by StreamSets is okay." "bc"
 StreamSetsCheckPctOfSysMemory()
 {
     SYSMEM="$(awk '/MemFree/ { printf "%.0f \n", $2*1024 }' /proc/meminfo)"
@@ -385,9 +436,42 @@ CheckTopFiveCPUConsumers()
     ps -eo pcpu,pmem,pid,ppid,user,stat,args | sort -k 1 -r | head -6|sed 's/$/\n/'
 }
 
-#=================================== Execute functions in FUNCTIONS_TO_RUN variable ===================================#
-for func in $(echo $FUNCTIONS_TO_RUN | sed "s/,/ /g"); do
+#======================================================================================================================#
+#================================================ Begin actual work ===================================================#
+#======================================================================================================================#
+
+# Test that required programs are installed
+missing_programs=()
+for c in $(printf '%s\n' "${REQUIRED_PROGRAMS[@]}" | sort -u )
+do
+   # Verify required programs are installed
+   command -v ${c} >/dev/null 2>/dev/null || {
+      missing_programs+=(${c})
+   }
+done
+if [ ${#missing_programs[@]} -ne 0 ]
+then
+   echo ""
+   echo "This script requires these program(s): ${missing_programs[@]}"
+   echo "Please install using your package manager"
+   echo ""
+   exit 1
+fi
+
+# If they specified a list of tests to include then that becomes our list of tests
+if [ ${#TESTS_INCLUDE[@]} -gt 0 ]
+then
+  TESTS_ALL=( ${TESTS_INCLUDE[@]} )
+fi
+# Now remove any tests in TESTS_EXCLUDE
+for del in ${TESTS_EXCLUDE[@]}
+do
+   TESTS_ALL=("${TESTS_ALL[@]/$del}")
+done
+
+#=================================== Execute functions in TESTS_ALL variable ===================================#
+for func in $(echo ${TESTS_ALL[@]} | sed "s/,/ /g"); do
     ${func}
 done
 
-#=================================== End of Script ===================================#
+
