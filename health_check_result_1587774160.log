@@ -1,0 +1,15 @@
+==================== StreamSetsCheckMinMemory Log Output ====================
+
+StreamSets recommends at least 8 GB of heap memory available for both production and non-production 
+environments: Current Xmx: 512m 
+ 
+==================== StreamSetsCheckMaxMemory Log Output ====================
+
+Available memory is not excessive (i.e. > 64 GB). Current Xmx: 512m 
+ 
+==================== StreamSetsCheckPctOfSysMemory Log Output ====================
+
+StreamSets recommends that the heap size setting be no larger than 75% of 
+the available system memory.Current Xmx: 512m   Total system memory: 0 g 
+ 
+

@@ -6,9 +6,12 @@ declare -a TESTS_EXCLUDE 			# List of tests that should not be executed
 declare -a TESTS_INCLUDE  		# List of tests that should be excecuted.
 declare -A TESTS_DESCRIPTION  # Description of test.  Indexed by the test name.
 declare -a REQUIRED_PROGRAMS  # Add any dependencies into this array
+declare -a LOGOUTPUT          # capture string output to be displayed in log file
 TARGET_PRODUCT=all # Can be all, sdc, dpm|sch, transformer|xfm  # Tests can use this to know what configurations to test
 NONPROD=false
 OWNER="sdc"
+LOGFILE="health_check_result_$(date +%s).log"
+
 
 S="************************************"
 D="-------------------------------------"
@@ -25,8 +28,6 @@ if [ $COLOR == y ]; then
  CCOLOR="\e[47;31m${CCOLOR}\e[0m"
 }
 fi
-
-
 
 #=================================== Base functions ===================================#
 function HelpFunction()
@@ -48,74 +49,79 @@ function HelpFunction()
 }
 function RegisterTest()
 {
-  # RegisterTest TestFunctionName "Description of the test" "any,programs,this,is,dependent,on"
-  #echo "Registering ${#TESTS_ALL[@]} $1"
-  TESTS_ALL+=($1)
-  [ -n "$2" ] && TESTS_DESCRIPTION[$1]="$2"
-  [ -n "$3" ] && REQUIRED_PROGRAMS+=( $( echo "$3" | sed 's/,/ /g') )
+    # RegisterTest TestFunctionName "Description of the test" "any,programs,this,is,dependent,on"
+    #echo "Registering ${#TESTS_ALL[@]} $1"
+    TESTS_ALL+=($1)
+    [ -n "$2" ] && TESTS_DESCRIPTION[$1]="$2"
+    [ -n "$3" ] && REQUIRED_PROGRAMS+=( $( echo "$3" | sed 's/,/ /g') )
 }
 function ResultOutput
 {
-  # ResultOutput pass_fail_warn_info short_message optional_long_message
-  case "$1" in
-    OK|PASS|0)
-      echo -e "$GCOLOR ${FUNCNAME[1]} $2"
-      ;;
-    ERR|ERROR|FAIL|1)
-      echo -e "$CCOLOR ${FUNCNAME[1]} $2"
-      ;;
-    WARN|2)
-      echo -e "$WCOLOR ${FUNCNAME[1]} $2"
-      ;;
-    *)
-      echo -e "$ICOLOR $2"
-      ;;
-  esac
+    # ResultOutput pass_fail_warn_info short_message optional_long_message
+    case "$1" in
+        OK|PASS|0)
+            echo -e "$GCOLOR ${FUNCNAME[1]} $2"
+            ;;
+        ERR|ERROR|FAIL|1)
+            echo -e "$CCOLOR ${FUNCNAME[1]} $2"
+            ;;
+        WARN|2)
+            echo -e "$WCOLOR ${FUNCNAME[1]} $2"
+            ;;
+        *)
+            echo -e "$ICOLOR $2"
+            ;;
+    esac
+}
+function LogOutput
+{
+	[ -n "$1" ] && declare -a LOG_OUTPUT=("${!1}")
+    LOGOUTPUT+="==================== ${FUNCNAME[1]} Log Output ====================\n${LOG_OUTPUT[@]}"
 }
 
 unset PARAMS
 while (( "$#" )); do
-  case "$1" in
-    '-?'|-h|--help)
-      HelpFunction
-      exit 0
-      ;;
-    --product)
-      # Specify which StreamSets product this should execute for
-      TARGET_PRODUCT=$2
-      shift 2
-      ;;
-    -u|--user)
-      OWNER=$2
-      shift 2
-      ;;
-    -p|--pid)
-      PID=$2
-      shift 2
-      ;;
-    --exclude)
-      shift 2
-      ;;
-    --include)
-      shift 2
-      ;;
-    -n|--no-prod)
-      NONPROD="true"
-      shift
-      ;;
-    --) # end argument parsing
-      shift
-      break
-      ;;
-    -*|--*=) # unsupported flags
-      echo "Error: Unsupported flag $1" >&2
-      exit 1
-      ;;
-    *) # preserve positional arguments in case we want to use them later (for now we should error)
-      PARAMS="$PARAMS $1"
-      shift
-      ;;
-  esac
+    case "$1" in
+        '-?'|-h|--help)
+            HelpFunction
+            exit 0
+            ;;
+        --product)
+            # Specify which StreamSets product this should execute for
+            TARGET_PRODUCT=$2
+            shift 2
+            ;;
+        -u|--user)
+            OWNER=$2
+            shift 2
+            ;;
+        -p|--pid)
+            PID=$2
+            shift 2
+            ;;
+        --exclude)
+            shift 2
+            ;;
+        --include)
+            shift 2
+            ;;
+        -n|--no-prod)
+            NONPROD="true"
+            shift
+            ;;
+        --) # end argument parsing
+            shift
+            break
+            ;;
+        -*|--*=) # unsupported flags
+            echo "Error: Unsupported flag $1" >&2
+            exit 1
+            ;;
+        *) # preserve positional arguments in case we want to use them later (for now we should error)
+            PARAMS="$PARAMS $1"
+            shift
+            ;;
+    esac
 done
 
 #------variables used------#
@@ -134,7 +140,7 @@ ServiceChecks()
 }
 
 #=================================== Pre-calc memory settings ===================================#
-RegisterTest "StreamSetsCalcMemorySettings" "Check that % of memory in use by StreamSets is okay."
+RegisterTest "StreamSetsCalcMemorySettings" "Pre-calc given memory settings in relation to each other and standards"
 StreamSetsCalcMemorySettings()
 {
     if [ -z $PID ]; then
@@ -175,12 +181,15 @@ RegisterTest "StreamSetsCheckMemorySettingsMatch" "Checks initial and heap sizes
 StreamSetsCheckMemorySettingsMatch()
 {
     if [ $STREAMSETS_SDC_RAW_XMS -ne $STREAMSETS_SDC_RAW_XMX ]; then
-        ResultOutput WARN "Initial and maximum heap sizes are different.  Current Xms: $STREAMSETS_SDC_XMS    Current Xmx: $STREAMSETS_SDC_XMX"
-        #echo -e "\nStreamSets recommends following the industry-standard best practice of setting the"
-        #echo -e "\ninitial and maximum heap sizes to the same value."
-        #echo -e "\nCurrent Xms: $STREAMSETS_SDC_XMS    Current Xmx: $STREAMSETS_SDC_XMX  $WCOLOR"
+        ResultOutput WARN "Initial and maximum heap sizes different. Xms: $STREAMSETS_SDC_XMS    Xmx: $STREAMSETS_SDC_XMX"
+        local LOGOUT=("\nStreamSets recommends following the industry-standard best practice of setting the"
+            "\ninitial and maximum heap sizes to the same value."
+            "\nCurrent Xms: $STREAMSETS_SDC_XMS    Current Xmx: $STREAMSETS_SDC_XMX"
+            "\n \n")
+        LogOutput LOGOUT[@]
+        
     else
-        ResultOutput OK "Current Initial and Maximum heap sizes match. Current Xms: $STREAMSETS_SDC_XMS Current Xmx: $STREAMSETS_SDC_XMX"
+        ResultOutput OK "Current Initial and Maximum heap sizes match. Xms: $STREAMSETS_SDC_XMS    Xmx: $STREAMSETS_SDC_XMX"
     fi
 }
 
@@ -189,16 +198,22 @@ RegisterTest "StreamSetsCheckMinMemory" "Check current against min recommended m
 StreamSetsCheckMinMemory()
 {
     if [ $STREAMSETS_SDC_RAW_XMX -lt 8589934592 ]; then
-        ResultOutput FAIL "StreamSets recommends at least 8 GB of heap memory available for both production and non-production.  Current Xmx: $STREAMSETS_SDC_XMX"
-        #echo -e "\nStreamSets recommends at least 8 GB of heap memory available for both production and non-production"
-        #echo -e "environments: Current Xmx: $STREAMSETS_SDC_XMX  $CCOLOR" 
+        ResultOutput FAIL "At least 8 GB of heap memory required. Xmx: $STREAMSETS_SDC_XMX"
+        local LOGOUT=("\nStreamSets recommends at least 8 GB of heap memory available for both production and non-production"
+            "\nenvironments: Current Xmx: $STREAMSETS_SDC_XMX"
+            "\n \n")
+        LogOutput LOGOUT[@]
     elif [[ $STREAMSETS_SDC_RAW_XMX -lt 17179869184 && -z "$NONPROD" ]]; then
-        ResultOutput WARN "StreamSets recommends at least 16 GB of heap memory available for production environments."
-        #echo -e "\nStreamSets recommends at least 16 GB of heap memory available for production environments."
-        #echo -e "To suppress this warning in the future, set the -n flag. Current Xmx: $STREAMSETS_SDC_XMX  $WCOLOR"
+        ResultOutput WARN "At least 16 GB of heap memory required for production. Xmx: $STREAMSETS_SDC_XMX"
+        local LOGOUT=("\nStreamSets recommends at least 16 GB of heap memory available for production environments."
+            "\nTo suppress this warning in the future, set the -n flag. Current Xmx: $STREAMSETS_SDC_XMX"
+            "\n \n")
+        LogOutput LOGOUT[@]
     else
-        ResultOutput INFO "Sufficient memory is available to run StreamSets. Current Xmx: $STREAMSETS_SDC_XMX"
-        #echo -e "\nSufficient memory is available to run StreamSets. Current Xmx: $STREAMSETS_SDC_XMX  $GCOLOR"
+        ResultOutput INFO "Heap memory at or over recommended minimums. Xmx: $STREAMSETS_SDC_XMX"
+        local LOGOUT=("\nSufficient memory is available to run StreamSets. Current Xmx: $STREAMSETS_SDC_XMX"
+            "\n \n")
+        LOGOUT[@]
     fi
 }
 
@@ -207,12 +222,16 @@ RegisterTest "StreamSetsCheckMaxMemory" "Check current against max recommended m
 StreamSetsCheckMaxMemory()
 {
     if [ $STREAMSETS_SDC_RAW_XMX -ge 68719476736 ]; then
-        ResultOutput ERROR "StreamSets recommends no more than 64 GB of heap memory be available. Current Xmx: $STREAMSETS_SDC_XMX" 
-        #echo -e "\nStreamSets recommends no more than 64 GB of heap memory be available. Requiring more memory is often an"
-        #echo -e "indicator that the SDC has reached its carrying capacity. Current Xmx: $STREAMSETS_SDC_XMX  $CCOLOR" 
+        ResultOutput ERROR "64 GB max heap memory exceeded. Xmx: $STREAMSETS_SDC_XMX" 
+        local LOGOUT=("\nStreamSets recommends no more than 64 GB of heap memory be available. Requiring more memory is often an"
+            "\nindicator that the SDC has reached its carrying capacity. Current Xmx: $STREAMSETS_SDC_XMX"
+            "\n \n")
+        LogOutput LOGOUT[@]
     else
-        ResultOutput OK "Available memory is not excessive (i.e. > 64 GB). Current Xmx: $STREAMSETS_SDC_XMX" 
-        #echo -e "\nAvailable memory is not excessive (i.e. > 64 GB). Current Xmx: $STREAMSETS_SDC_XMX  $GCOLOR"
+        ResultOutput OK "Heap memory under 64 GB limit. Xmx: $STREAMSETS_SDC_XMX" 
+        local LOGOUT=("\nAvailable memory is not excessive (i.e. > 64 GB). Current Xmx: $STREAMSETS_SDC_XMX"
+            "\n \n")
+        LogOutput LOGOUT[@]
     fi
 }
 
@@ -226,28 +245,37 @@ StreamSetsCheckPctOfSysMemory()
     PCT_OF_SYSMEM=$(echo $PCT_OF_SYSMEM*100 | bc -l)
     PCT_OF_SYSMEM=$(printf %0.f $PCT_OF_SYSMEM)
     if [ $PCT_OF_SYSMEM -gt 75 ]; then
-        echo -e "\nStreamSets recommends that the heap size setting be no larger than 75% of the available system memory."
-        echo -e "Current Xmx: $STREAMSETS_SDC_XMX   Total system memory: ${SYSMEM_IN_GB}g  $WCOLOR"
+        ResultOutput WARN "Heap memory exceeds 75% of system memory. Xmx: $STREAMSETS_SDC_XMX    System: ${SYSMEM_IN_GB}g"
+        local LOGOUT=("\nStreamSets recommends that the heap size setting be no larger than 75% of"
+            "\nthe available system memory.Current Xmx: $STREAMSETS_SDC_XMX   Total system memory: ${SYSMEM_IN_GB}g"
+            "\n \n")
+        LogOutput LOGOUT[@]
     else
-        echo -e "\nAvailable heap memory is below 75% of total system memory."
-        echo -e "Current Xmx: $STREAMSETS_SDC_XMX   Total system memory: ${SYSMEM_IN_GB}g  $GCOLOR"
+    	ResultOutput OK "Heap memory under 75% of system memory. Xmx: $STREAMSETS_SDC_XMX    System: ${SYSMEM_IN_GB}g"
+        local LOGOUT=("\nAvailable heap memory is below 75% of total system memory."
+            "Current Xmx: $STREAMSETS_SDC_XMX   Total system memory: ${SYSMEM_IN_GB}g"
+            "\n \n")
+        LogOutput LOGOUT[@]
     fi
 }
 
 #=================================== Print Operating System Details ===================================#
 PrintOSDetails()
 {
-    echo -e "\n\nPrint Operating System Details"
-    echo -e "$D"
+    HOSTNAME=`$(hostname -f &> /dev/null && printf "Hostname : $(hostname -f)" || printf "Hostname : $(hostname -s)")`
 
-    hostname -f &> /dev/null && printf "Hostname : $(hostname -f)" || printf "Hostname : $(hostname -s)"
+    OS=`$([ -x /usr/bin/lsb_release ] &&  echo -e "\nOperating System :" $(lsb_release -d|awk -F: '{print $2}'|sed -e 's/^[ \t]*//')  || \
+    echo -e "\nOperating System :" $(cat /etc/system-release))`
 
-    [ -x /usr/bin/lsb_release ] &&  echo -e "\nOperating System :" $(lsb_release -d|awk -F: '{print $2}'|sed -e 's/^[ \t]*//')  || \
-    echo -e "\nOperating System :" $(cat /etc/system-release)
+    KERNEL=`$(echo -e "Kernel Version : " $(uname -r))`
 
-    echo -e "Kernel Version : " $(uname -r)
-
-    printf "OS Architecture : "$(arch | grep x86_64 &> /dev/null) && printf " 64 Bit OS\n"  || printf " 32 Bit OS\n"
+    OSARCH=`$(printf "OS Architecture : "$(arch | grep x86_64 &> /dev/null) && printf " 64 Bit OS\n"  || printf " 32 Bit OS\n")`
+    local LOGOUT=("\nHostname: ${HOSTNAME}"
+        "\nOperating System: ${OS}"
+        "\nKernel: ${KERNEL}"
+        "\nOperating System Architecture: ${OSARCH}"
+        "\n \n")
+    LogOutput LOGOUT[@]
 }
 
 #=================================== Print system uptime ===================================#
@@ -461,4 +489,5 @@ for func in $(echo ${TESTS_ALL[@]} | sed "s/,/ /g"); do
     ${func}
 done
 
-
+#=================================== Print Log Output ===================================#
+echo -e "${LOGOUTPUT}" &> $LOGFILE
