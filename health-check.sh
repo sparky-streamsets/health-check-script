@@ -260,45 +260,53 @@ StreamSetsCheckPctOfSysMemory()
 }
 
 #=================================== Print Operating System Details ===================================#
+RegisterTest "PrintOSDetails" "Logs system details (Hostname, OS, Kernel, and OS architecture)"
 PrintOSDetails()
 {
-    HOSTNAME=`$(hostname -f &> /dev/null && printf "Hostname : $(hostname -f)" || printf "Hostname : $(hostname -s)")`
+    HOSTNAME=`hostname -f &> /dev/null && printf "Hostname : $(hostname -f)" || printf "Hostname : $(hostname -s)"`
 
-    OS=`$([ -x /usr/bin/lsb_release ] &&  echo -e "\nOperating System :" $(lsb_release -d|awk -F: '{print $2}'|sed -e 's/^[ \t]*//')  || \
-    echo -e "\nOperating System :" $(cat /etc/system-release))`
+    OS=`[ -x /usr/bin/lsb_release ] &&  echo -e "Operating System :" $(lsb_release -d|awk -F: '{print $2}'|sed -e 's/^[ \t]*//')  || \
+    echo -e "\nOperating System :" $(cat /etc/system-release)`
 
-    KERNEL=`$(echo -e "Kernel Version : " $(uname -r))`
+    KERNEL=$(echo -e "Kernel Version : " $(uname -r))
 
-    OSARCH=`$(printf "OS Architecture : "$(arch | grep x86_64 &> /dev/null) && printf " 64 Bit OS\n"  || printf " 32 Bit OS\n")`
-    local LOGOUT=("\nHostname: ${HOSTNAME}"
-        "\nOperating System: ${OS}"
-        "\nKernel: ${KERNEL}"
-        "\nOperating System Architecture: ${OSARCH}"
+    OSARCH=$(printf "OS Architecture : "$(arch | grep x86_64 &> /dev/null) && printf " 64 Bit OS\n"  || printf " 32 Bit OS\n")
+    local LOGOUT=("\n${HOSTNAME}"
+        "\n${OS}"
+        "\n${KERNEL}"
+        "\n${OSARCH}"
         "\n \n")
     LogOutput LOGOUT[@]
 }
 
 #=================================== Print system uptime ===================================#
+RegisterTest "PrintSystemUptime" "Shows how long the host system has been running"
 PrintSystemUptime()
 {
     UPTIME=$(uptime)
-    echo $UPTIME|grep day &> /dev/null
+    CURR_UPTIME=`echo $UPTIME|grep day &> /dev/null`
     if [ $? != 0 ]
         then
-            echo $UPTIME|grep -w min &> /dev/null && echo -e "System Uptime : "$(echo $UPTIME|awk '{print $2" by "$3}'|sed -e 's/,.*//g')" minutes" \
-            || echo -e "System Uptime : "$(echo $UPTIME|awk '{print $2" by "$3" "$4}'|sed -e 's/,.*//g')" hours"
+            CURR_UPTIME=`echo $UPTIME|grep -w min &> /dev/null` && SYS_UPTIME=$(echo -e "System Uptime : "$(echo $UPTIME|awk '{print $2" by "$3}'|sed -e 's/,.*//g')" minutes") \
+            || SYS_UPTIME=`echo -e "System Uptime : "$(echo $UPTIME|awk '{print $2" by "$3" "$4}'|sed -e 's/,.*//g')" hours"`
     else
-        echo -e "System Uptime : " $(echo $UPTIME|awk '{print $2" by "$3" "$4" "$5" hours"}'|sed -e 's/,//g')
+        SYS_UPTIME=`echo -e "System Uptime : " $(echo $UPTIME|awk '{print $2" by "$3" "$4" "$5" hours"}'|sed -e 's/,//g')`
     fi
-    echo -e "Current System Date & Time : "$(date +%c)
+    CURR_DATETIME=$(echo -e "Current System Date & Time : "$(date +%c))
+    local LOGOUT=("\n${SYS_UPTIME}"
+        "\n${CURR_DATETIME}"
+        "\n \n")
+    LogOutput LOGOUT[@]
 }
         
 #=================================== Check for any read-only file systems ===================================#
+RegisterTest "FindReadOnlyFileSystems" "Checks to see if any read-only file systems are mounted in this environment"
 FindReadOnlyFileSystems()
 {
-    echo -e "\nChecking For Read-only File System[s]"
-    echo -e "$D"
-    echo "$MOUNT"|grep -w \(ro\) && echo -e "\n.....Read Only file system[s] found"|| echo -e ".....No read-only file system[s] found. "
+    READONLY=`echo "$MOUNT"|grep -w \(ro\) && echo -e "\n.....Read Only file system[s] found"|| echo -e ".....No read-only file system[s] found. "`
+    local LOGOUT=("\n${READONLY}"
+        "\n \n")
+    LogOutput LOGOUT[@]
 }
 
 #=================================== Check for currently mounted file systems ===================================#
