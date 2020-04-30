@@ -34,7 +34,7 @@ function HelpFunction()
 {
     echo ""
     echo "Usage:$0 (-h|--help) (-u|--user) <svcacct> (-p|--process) <pid> --exclude <functionlist> --include <functionlist> (-n|--no-prod)"
-    echo -e "\n\n\tAvailable functions: ServiceChecks,PrintOSDetails,PrintSystemUptime,FindReadOnlyFileSystems,"
+    echo -e "\n\n\tAvailable functions: PreflightChecks,ServiceChecks,PrintOSDetails,PrintSystemUptime,FindReadOnlyFileSystems,"
     echo -e "\tFindCurrentlyMountedFileSystems,CheckDiskUsage,FindZombieProcesses,CheckInodeUsage,CheckSwapUtilization,"
     echo -e "\tCheckProcessorUtilization,CheckLoadAverage,CheckMostRecentReboots,CheckShutdownEvents,"
     echo -e "\tCheckTopFiveMemoryConsumers,CheckTopFiveCPUConsumers"
@@ -128,6 +128,63 @@ done
 MOUNT=$(mount|egrep -iw "ext4|ext3|xfs|gfs|gfs2|btrfs"|grep -v "loop"|sort -u -t' ' -k1,2)
 FS_USAGE=$(df -PTh|egrep -iw "ext4|ext3|xfs|gfs|gfs2|btrfs"|grep -v "loop"|sort -k6n|awk '!seen[$1]++')
 IUSAGE=$(df -PThi|egrep -iw "ext4|ext3|xfs|gfs|gfs2|btrfs"|grep -v "loop"|sort -k6n|awk '!seen[$1]++')
+
+#=================================== PreflightChecks ===================================#
+PreflightChecks()
+{
+    StreamSetsCheckJVMVersion
+    StreamSetsCheckUlimit
+}
+
+#=================================== Check compatible JVM version ===================================#
+RegisterTest "StreamSetsCheckJVMVersion" "Ensure that a compatible JVM is installed and available"
+StreamSetsCheckJVMVersion()
+{
+    if type -p java; then
+        _java=java
+    elif [[ -n "$JAVA_HOME" ]] && [[ -x "$JAVA_HOME/bin/java" ]];  then
+        _java="$JAVA_HOME/bin/java"
+    else
+         ResultOutput FAIL "No JVM installed. Please install OpenJDK 8."
+    fi
+    
+    if [[ "$_java" ]]; then
+        vendor=$("$_java" -version 2>&1 | awk -F '"' '/version/ {print $1}')
+        version=$("$_java" -version 2>&1 | head -1 | cut -d'"' -f2 | sed '/^1\./s///' | cut -d'.' -f1)
+        if [[ "$vendor" -ne "openjdk version" ]]; then
+            ResultOutput WARN "JVM vendor is not OpenJDK"
+            local LOGOUT=("We noticed that you're not using a JVM provided by OpenJDK. JVMs provided by other"
+                "vendors (i.e. Oracle, IBM, JRocket) will either not be compatible or will have reached EOL"
+                "on JVM version 8. StreamSets recommends installing OpenJDK 8."
+                "\n \n")
+            LogOutput LOGOUT[@]
+        elif [[ "$version" != 8 ]]; then
+        	ResultOutput WARN "JVM version is not 8"
+        	local LOGOUT=("We noticed that your JVM version is not 8. Unfortunately, StreamSets is not yet"
+        	    "compatible with newer versions of the JVM, and older versions have reached EOL. StreamSets"
+        	    "recommends installing OpenJDK 8"
+                "\n \n")
+            LogOutput LOGOUT[@]
+        else
+            ResultOutput OK "StreamSets-recommended OpenJDK 8 installed and available"
+        fi
+    fi
+}
+
+#=================================== Check ulimit max file handle setting ===================================#
+RegisterTest "StreamSetsCheckUlimit" "Ensure that hard and soft open file limit setting is set to required minimum: 32768"
+StreamSetsCheckUlimit()
+{
+    if [[ `ulimit -n` < 32768 ]]; then
+        ResultOutput FAIL "Open file limit setting too low (< 32768)"
+        local LOGOUT=("StreamSets Data Collector requires minimum hard and soft open file limit setting of 32768."
+        	"See https://access.redhat.com/solutions/61334 for info on how to set file limit"
+            "\n \n")
+        LogOutput LOGOUT[@]
+    else
+        ResultOutput OK "Hard and soft open file limit setting is correct"
+    fi
+}
 
 #=================================== ServiceChecks ===================================#
 ServiceChecks()
@@ -310,11 +367,13 @@ FindReadOnlyFileSystems()
 }
 
 #=================================== Check for currently mounted file systems ===================================#
+RegisterTest "FindCurrentlyMountedFileSystems" "List currently mounted file systems"
 FindCurrentlyMountedFileSystems()
 {
-    echo -e "\n\nChecking For Currently Mounted File System[s]"
-    echo -e "$D$D"
-    echo "$MOUNT"|column -t
+    CURRENT_MOUNT_FS=`echo "$MOUNT"|column -t`
+    local LOGOUT=("\n${CURRENT_MOUNT_FS}"
+        "\n \n")
+    LogOutput LOGOUT[@]
 }
 
 #=================================== Check disk usage on all mounted file systems ===================================#
