@@ -132,15 +132,49 @@ IUSAGE=$(df -PThi|egrep -iw "ext4|ext3|xfs|gfs|gfs2|btrfs"|grep -v "loop"|sort -
 #=================================== PreflightChecks ===================================#
 PreflightChecks()
 {
+    StreamSetsCheckOS
     StreamSetsCheckJVMVersion
     StreamSetsCheckUlimit
+}
+
+#=================================== Check supported OS ===================================#
+RegisterTest "StreamSetsCheckOS" "Ensure that this is a supported operating system"
+StreamSetsCheckOS()
+{
+    SUPPORTED_OS=("CentOS release 6" "CentOS Linux release 7" 
+        "Oracle Linux Server release 6" "Oracle Linux Server release 7" 
+        "Red Hat Enterprise Linux Server release 6" "Red Hat Enterprise Linux Server release 7" 
+        "Ubuntu 14.04" "Ubuntu 16.04")
+    if [ `uname` -eq "Darwin" ]; then
+        ResultOutput OK "Mac OSX is a supported OS"
+    else
+        OS=`[ -x /usr/bin/lsb_release ] &&  echo -e "Operating System :" $(lsb_release -d|awk -F: '{print $2}'|sed -e 's/^[ \t]*//')  || \
+        echo -e "\nOperating System :" $(cat /etc/system-release)`
+        FOUND="false"
+        for i in $( echo "$SUPPORTED_OS"); do
+        {
+            if [[ "$OS" == *"$i"* ]]; then
+                FOUND="true"
+                ResultOutput OK "$OS is a supported OS"
+        	fi
+        }
+        done
+        if [[ $FOUND == "false" ]]; then
+            ResultOutput WARN "$OS is not an officially supported OS"
+            local LOGOUT=("The following operating systems are officially supported by StreamSets: Mac OSX,"
+                "CentOS 6.x or 7.x, Oracle Linux 6.x or 7.x, RHEL 6.x or 7.x, and Ubuntu 14.04 or 16.04 LTS."
+                "Other operating systems may still work but haven't been tested and certified by StreamSets"
+                "\n \n")
+            LogOutput LOGOUT[@]
+        fi
+    fi
 }
 
 #=================================== Check compatible JVM version ===================================#
 RegisterTest "StreamSetsCheckJVMVersion" "Ensure that a compatible JVM is installed and available"
 StreamSetsCheckJVMVersion()
 {
-    if type -p java; then
+    if type -p java &>/dev/null; then
         _java=java
     elif [[ -n "$JAVA_HOME" ]] && [[ -x "$JAVA_HOME/bin/java" ]];  then
         _java="$JAVA_HOME/bin/java"
@@ -151,7 +185,7 @@ StreamSetsCheckJVMVersion()
     if [[ "$_java" ]]; then
         vendor=$("$_java" -version 2>&1 | awk -F '"' '/version/ {print $1}')
         version=$("$_java" -version 2>&1 | head -1 | cut -d'"' -f2 | sed '/^1\./s///' | cut -d'.' -f1)
-        if [[ "$vendor" -ne "openjdk version" ]]; then
+        if [[ "$vendor" != *"openjdk"* ]]; then
             ResultOutput WARN "JVM vendor is not OpenJDK"
             local LOGOUT=("We noticed that you're not using a JVM provided by OpenJDK. JVMs provided by other"
                 "vendors (i.e. Oracle, IBM, JRocket) will either not be compatible or will have reached EOL"
@@ -317,19 +351,15 @@ StreamSetsCheckPctOfSysMemory()
 }
 
 #=================================== Print Operating System Details ===================================#
-RegisterTest "PrintOSDetails" "Logs system details (Hostname, OS, Kernel, and OS architecture)"
+RegisterTest "PrintOSDetails" "Logs system details (Hostname, Kernel, and OS architecture)"
 PrintOSDetails()
 {
     HOSTNAME=`hostname -f &> /dev/null && printf "Hostname : $(hostname -f)" || printf "Hostname : $(hostname -s)"`
-
-    OS=`[ -x /usr/bin/lsb_release ] &&  echo -e "Operating System :" $(lsb_release -d|awk -F: '{print $2}'|sed -e 's/^[ \t]*//')  || \
-    echo -e "\nOperating System :" $(cat /etc/system-release)`
 
     KERNEL=$(echo -e "Kernel Version : " $(uname -r))
 
     OSARCH=$(printf "OS Architecture : "$(arch | grep x86_64 &> /dev/null) && printf " 64 Bit OS\n"  || printf " 32 Bit OS\n")
     local LOGOUT=("\n${HOSTNAME}"
-        "\n${OS}"
         "\n${KERNEL}"
         "\n${OSARCH}"
         "\n \n")
