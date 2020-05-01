@@ -34,10 +34,10 @@ function HelpFunction()
 {
     echo ""
     echo "Usage:$0 (-h|--help) (-u|--user) <svcacct> (-p|--process) <pid> --exclude <functionlist> --include <functionlist> (-n|--no-prod)"
-    echo -e "\n\n\tAvailable functions: PreflightChecks,ServiceChecks,PrintOSDetails,PrintSystemUptime,FindReadOnlyFileSystems,"
-    echo -e "\tFindCurrentlyMountedFileSystems,CheckDiskUsage,FindZombieProcesses,CheckInodeUsage,CheckSwapUtilization,"
-    echo -e "\tCheckProcessorUtilization,CheckLoadAverage,CheckMostRecentReboots,CheckShutdownEvents,"
-    echo -e "\tCheckTopFiveMemoryConsumers,CheckTopFiveCPUConsumers"
+    echo -e "\n\n\tAvailable functions: CheckSupportedOS,CheckJVMVersion,CheckUlimit,PrintOSDetails,PrintSystemUptime,"
+    echo -e "\tFindReadOnlyFileSystems,FindCurrentlyMountedFileSystems,CheckDiskUsage,FindZombieProcesses,"
+    echo -e "\tCheckSwapUtilization,CheckProcessorUtilization,CheckMemorySettingsMatch,CheckMinMemory,"
+    echo -e "\tCheckMaxMemory,CheckPctOfSysMemory"
     echo -e "\n\nOptions:"
     echo -e "\t-h | --help                        print this help message and exit"
     echo -e "\t-u | --user <uid>                  optional name of service account running StreamSets as a service (default: sdc)"
@@ -100,9 +100,11 @@ while (( "$#" )); do
             shift 2
             ;;
         --exclude)
+        	IFS=',' read -a TESTS_EXCLUDE <<< "$2"
             shift 2
             ;;
         --include)
+        	IFS=',' read -a TESTS_INCLUDE <<< "$2"
             shift 2
             ;;
         -n|--no-prod)
@@ -130,22 +132,15 @@ FS_USAGE=$(df -PTh|egrep -iw "ext4|ext3|xfs|gfs|gfs2|btrfs"|grep -v "loop"|sort 
 IUSAGE=$(df -PThi|egrep -iw "ext4|ext3|xfs|gfs|gfs2|btrfs"|grep -v "loop"|sort -k6n|awk '!seen[$1]++')
 
 #=================================== PreflightChecks ===================================#
-PreflightChecks()
-{
-    StreamSetsCheckOS
-    StreamSetsCheckJVMVersion
-    StreamSetsCheckUlimit
-}
-
 #=================================== Check supported OS ===================================#
-RegisterTest "StreamSetsCheckOS" "Ensure that this is a supported operating system"
-StreamSetsCheckOS()
+RegisterTest "CheckSupportedOS" "Ensure that this is a supported operating system"
+CheckSupportedOS()
 {
     SUPPORTED_OS=("CentOS release 6" "CentOS Linux release 7" 
         "Oracle Linux Server release 6" "Oracle Linux Server release 7" 
         "Red Hat Enterprise Linux Server release 6" "Red Hat Enterprise Linux Server release 7" 
         "Ubuntu 14.04" "Ubuntu 16.04")
-    if [ `uname` -eq "Darwin" ]; then
+    if [[ `uname` == "Darwin" ]]; then
         ResultOutput OK "Mac OSX is a supported OS"
     else
         OS=`[ -x /usr/bin/lsb_release ] &&  echo -e "Operating System :" $(lsb_release -d|awk -F: '{print $2}'|sed -e 's/^[ \t]*//')  || \
@@ -171,8 +166,8 @@ StreamSetsCheckOS()
 }
 
 #=================================== Check compatible JVM version ===================================#
-RegisterTest "StreamSetsCheckJVMVersion" "Ensure that a compatible JVM is installed and available"
-StreamSetsCheckJVMVersion()
+RegisterTest "CheckJVMVersion" "Ensure that a compatible JVM is installed and available"
+CheckJVMVersion()
 {
     if type -p java &>/dev/null; then
         _java=java
@@ -206,8 +201,8 @@ StreamSetsCheckJVMVersion()
 }
 
 #=================================== Check ulimit max file handle setting ===================================#
-RegisterTest "StreamSetsCheckUlimit" "Ensure that hard and soft open file limit setting is set to required minimum: 32768"
-StreamSetsCheckUlimit()
+RegisterTest "CheckUlimit" "Ensure that hard and soft open file limit setting is set to required minimum: 32768"
+CheckUlimit()
 {
     if [[ `ulimit -n` < 32768 ]]; then
         ResultOutput FAIL "Open file limit setting too low (< 32768)"
@@ -217,136 +212,6 @@ StreamSetsCheckUlimit()
         LogOutput LOGOUT[@]
     else
         ResultOutput OK "Hard and soft open file limit setting is correct"
-    fi
-}
-
-#=================================== ServiceChecks ===================================#
-ServiceChecks()
-{
-    StreamSetsCalcMemorySettings
-    StreamSetsCheckMemorySettingsMatch
-    StreamSetsCheckMinMemory
-    StreamSetsCheckMaxMemory
-    StreamSetsCheckPctOfSysMemory
-}
-
-#=================================== Pre-calc memory settings ===================================#
-RegisterTest "StreamSetsCalcMemorySettings" "Pre-calc given memory settings in relation to each other and standards"
-StreamSetsCalcMemorySettings()
-{
-    if [ -z $PID ]; then
-        STREAMSETS_SDC_XMX="$(ps -f -u $OWNER | grep -Eo 'Xmx[[:digit:]]+(k|K|m|M|g|G|[[:space:]])' | sed 's/Xmx//g')"
-    else
-        STREAMSETS_SDC_XMX="$(ps -f -p $PID | grep -Eo 'Xmx[[:digit:]]+(k|K|m|M|g|G|[[:space:]])' | sed 's/Xmx//g')"
-    fi
-    MULTIPLE=1
-    if [[ "$STREAMSETS_SDC_XMX" =~ (k|K)$ ]]; then
-        MULTIPLE=2**10
-    elif [[ "$STREAMSETS_SDC_XMX" =~ (m|M)$ ]]; then
-        MULTIPLE=2**20
-    elif [[ "$STREAMSETS_SDC_XMX" =~ (g|G)$ ]]; then
-        MULTIPLE=2**30
-    fi
-    STREAMSETS_SDC_RAW_XMX="$(echo $STREAMSETS_SDC_XMX | tr -d '[:space:]' | tr -d '[:alpha:]')"
-    STREAMSETS_SDC_RAW_XMX=$(echo $((STREAMSETS_SDC_RAW_XMX * MULTIPLE)))
-
-    if [ -z $PID ]; then
-        STREAMSETS_SDC_XMS="$(ps -f -u $OWNER | grep -Eo 'Xms[[:digit:]]+(k|K|m|M|g|G|[[:space:]])' | sed 's/Xms//g')"
-    else
-        STREAMSETS_SDC_XMS="$(ps -f -p $PID | grep -Eo 'Xmx[[:digit:]]+(k|K|m|M|g|G|[[:space:]])' | sed 's/Xmx//g')"
-    fi
-    MULTIPLE=1
-    if [[ "$STREAMSETS_SDC_XMS" =~ (k|K)$ ]]; then
-        MULTIPLE=2**10
-    elif [[ "$STREAMSETS_SDC_XMS" =~ (m|M)$ ]]; then
-        MULTIPLE=2**20
-    elif [[ "$STREAMSETS_SDC_XMS" =~ (g|G)$ ]]; then
-        MULTIPLE=2**30
-    fi
-    STREAMSETS_SDC_RAW_XMS="$(echo $STREAMSETS_SDC_XMS | tr -d '[:space:]' | tr -d '[:alpha:]')"
-    STREAMSETS_SDC_RAW_XMS=$(echo $((STREAMSETS_SDC_RAW_XMS * MULTIPLE)))
-}
-
-#=================================== Check initial and heap sizes match ===================================#
-RegisterTest "StreamSetsCheckMemorySettingsMatch" "Checks initial and heap sizes match."
-StreamSetsCheckMemorySettingsMatch()
-{
-    if [ $STREAMSETS_SDC_RAW_XMS -ne $STREAMSETS_SDC_RAW_XMX ]; then
-        ResultOutput WARN "Initial and maximum heap sizes different. Xms: $STREAMSETS_SDC_XMS    Xmx: $STREAMSETS_SDC_XMX"
-        local LOGOUT=("\nStreamSets recommends following the industry-standard best practice of setting the"
-            "\ninitial and maximum heap sizes to the same value."
-            "\nCurrent Xms: $STREAMSETS_SDC_XMS    Current Xmx: $STREAMSETS_SDC_XMX"
-            "\n \n")
-        LogOutput LOGOUT[@]
-        
-    else
-        ResultOutput OK "Current Initial and Maximum heap sizes match. Xms: $STREAMSETS_SDC_XMS    Xmx: $STREAMSETS_SDC_XMX"
-    fi
-}
-
-#=================================== Check current against min recommended memory ===================================#
-RegisterTest "StreamSetsCheckMinMemory" "Check current against min recommended memory"
-StreamSetsCheckMinMemory()
-{
-    if [ $STREAMSETS_SDC_RAW_XMX -lt 8589934592 ]; then
-        ResultOutput FAIL "At least 8 GB of heap memory required. Xmx: $STREAMSETS_SDC_XMX"
-        local LOGOUT=("\nStreamSets recommends at least 8 GB of heap memory available for both production and non-production"
-            "\nenvironments: Current Xmx: $STREAMSETS_SDC_XMX"
-            "\n \n")
-        LogOutput LOGOUT[@]
-    elif [[ $STREAMSETS_SDC_RAW_XMX -lt 17179869184 && -z "$NONPROD" ]]; then
-        ResultOutput WARN "At least 16 GB of heap memory required for production. Xmx: $STREAMSETS_SDC_XMX"
-        local LOGOUT=("\nStreamSets recommends at least 16 GB of heap memory available for production environments."
-            "\nTo suppress this warning in the future, set the -n flag. Current Xmx: $STREAMSETS_SDC_XMX"
-            "\n \n")
-        LogOutput LOGOUT[@]
-    else
-        ResultOutput INFO "Heap memory at or over recommended minimums. Xmx: $STREAMSETS_SDC_XMX"
-        local LOGOUT=("\nSufficient memory is available to run StreamSets. Current Xmx: $STREAMSETS_SDC_XMX"
-            "\n \n")
-        LOGOUT[@]
-    fi
-}
-
-#=================================== Check current against max recommended memory ===================================#
-RegisterTest "StreamSetsCheckMaxMemory" "Check current against max recommended memory"
-StreamSetsCheckMaxMemory()
-{
-    if [ $STREAMSETS_SDC_RAW_XMX -ge 68719476736 ]; then
-        ResultOutput ERROR "64 GB max heap memory exceeded. Xmx: $STREAMSETS_SDC_XMX" 
-        local LOGOUT=("\nStreamSets recommends no more than 64 GB of heap memory be available. Requiring more memory is often an"
-            "\nindicator that the SDC has reached its carrying capacity. Current Xmx: $STREAMSETS_SDC_XMX"
-            "\n \n")
-        LogOutput LOGOUT[@]
-    else
-        ResultOutput OK "Heap memory under 64 GB limit. Xmx: $STREAMSETS_SDC_XMX" 
-        local LOGOUT=("\nAvailable memory is not excessive (i.e. > 64 GB). Current Xmx: $STREAMSETS_SDC_XMX"
-            "\n \n")
-        LogOutput LOGOUT[@]
-    fi
-}
-
-#=================================== Check % of memory used by StreamSets ===================================#
-RegisterTest "StreamSetsCheckPctOfSysMemory" "Check that % of memory in use by StreamSets is okay." "bc"
-StreamSetsCheckPctOfSysMemory()
-{
-    SYSMEM="$(awk '/MemFree/ { printf "%.0f \n", $2*1024 }' /proc/meminfo)"
-    SYSMEM_IN_GB="$(awk '/MemFree/ { printf "%.0f \n", $2/1024/1024 }' /proc/meminfo)"
-    PCT_OF_SYSMEM="$(echo $STREAMSETS_SDC_RAW_XMX/$SYSMEM |bc -l)"
-    PCT_OF_SYSMEM=$(echo $PCT_OF_SYSMEM*100 | bc -l)
-    PCT_OF_SYSMEM=$(printf %0.f $PCT_OF_SYSMEM)
-    if [ $PCT_OF_SYSMEM -gt 75 ]; then
-        ResultOutput WARN "Heap memory exceeds 75% of system memory. Xmx: $STREAMSETS_SDC_XMX    System: ${SYSMEM_IN_GB}g"
-        local LOGOUT=("\nStreamSets recommends that the heap size setting be no larger than 75% of"
-            "\nthe available system memory.Current Xmx: $STREAMSETS_SDC_XMX   Total system memory: ${SYSMEM_IN_GB}g"
-            "\n \n")
-        LogOutput LOGOUT[@]
-    else
-    	ResultOutput OK "Heap memory under 75% of system memory. Xmx: $STREAMSETS_SDC_XMX    System: ${SYSMEM_IN_GB}g"
-        local LOGOUT=("\nAvailable heap memory is below 75% of total system memory."
-            "Current Xmx: $STREAMSETS_SDC_XMX   Total system memory: ${SYSMEM_IN_GB}g"
-            "\n \n")
-        LogOutput LOGOUT[@]
     fi
 }
 
@@ -470,46 +335,132 @@ CheckProcessorUtilization()
     LogOutput LOGOUT[@]
 }
 
-#=================================== Check for load average (current data) ===================================#
-CheckLoadAverage()
+#=================================== ServiceChecks ===================================#
+#=================================== Pre-calc memory settings ===================================#
+CalcMemorySettings()
 {
-    echo -e "\n\nChecking For Load Average"
-    echo -e "$D"
-    echo -e "Current Load Average : $(uptime|grep -o "load average.*"|awk '{print $3" " $4" " $5}')"
+    if [ -z $PID ]; then
+        STREAMSETS_SDC_XMX="$(ps -f -u $OWNER | grep -Eo 'Xmx[[:digit:]]+(k|K|m|M|g|G|[[:space:]])' | sed 's/Xmx//g')"
+    else
+        STREAMSETS_SDC_XMX="$(ps -f -p $PID | grep -Eo 'Xmx[[:digit:]]+(k|K|m|M|g|G|[[:space:]])' | sed 's/Xmx//g')"
+    fi
+    MULTIPLE=1
+    if [[ "$STREAMSETS_SDC_XMX" =~ (k|K)$ ]]; then
+        MULTIPLE=2**10
+    elif [[ "$STREAMSETS_SDC_XMX" =~ (m|M)$ ]]; then
+        MULTIPLE=2**20
+    elif [[ "$STREAMSETS_SDC_XMX" =~ (g|G)$ ]]; then
+        MULTIPLE=2**30
+    fi
+    STREAMSETS_SDC_RAW_XMX="$(echo $STREAMSETS_SDC_XMX | tr -d '[:space:]' | tr -d '[:alpha:]')"
+    STREAMSETS_SDC_RAW_XMX=$(echo $((STREAMSETS_SDC_RAW_XMX * MULTIPLE)))
+
+    if [ -z $PID ]; then
+        STREAMSETS_SDC_XMS="$(ps -f -u $OWNER | grep -Eo 'Xms[[:digit:]]+(k|K|m|M|g|G|[[:space:]])' | sed 's/Xms//g')"
+    else
+        STREAMSETS_SDC_XMS="$(ps -f -p $PID | grep -Eo 'Xmx[[:digit:]]+(k|K|m|M|g|G|[[:space:]])' | sed 's/Xmx//g')"
+    fi
+    MULTIPLE=1
+    if [[ "$STREAMSETS_SDC_XMS" =~ (k|K)$ ]]; then
+        MULTIPLE=2**10
+    elif [[ "$STREAMSETS_SDC_XMS" =~ (m|M)$ ]]; then
+        MULTIPLE=2**20
+    elif [[ "$STREAMSETS_SDC_XMS" =~ (g|G)$ ]]; then
+        MULTIPLE=2**30
+    fi
+    STREAMSETS_SDC_RAW_XMS="$(echo $STREAMSETS_SDC_XMS | tr -d '[:space:]' | tr -d '[:alpha:]')"
+    STREAMSETS_SDC_RAW_XMS=$(echo $((STREAMSETS_SDC_RAW_XMS * MULTIPLE)))
 }
 
-#=================================== Print most recent 3 reboot events if available ===================================#
-CheckMostRecentReboots()
+#=================================== Check initial and heap sizes match ===================================#
+RegisterTest "CheckMemorySettingsMatch" "Checks initial and heap sizes match."
+CheckMemorySettingsMatch()
 {
-    echo -e "\n\nMost Recent 3 Reboot Events"
-    echo -e "$D$D"
-    last -x 2> /dev/null|grep reboot 1> /dev/null && /usr/bin/last -x 2> /dev/null|grep reboot|head -3 || \
-    echo -e "No reboot events are recorded."
+	CalcMemorySettings
+	
+    if [ $STREAMSETS_SDC_RAW_XMS -ne $STREAMSETS_SDC_RAW_XMX ]; then
+        ResultOutput WARN "Initial and maximum heap sizes different. Xms: $STREAMSETS_SDC_XMS    Xmx: $STREAMSETS_SDC_XMX"
+        local LOGOUT=("\nStreamSets recommends following the industry-standard best practice of setting the"
+            "\ninitial and maximum heap sizes to the same value."
+            "\nCurrent Xms: $STREAMSETS_SDC_XMS    Current Xmx: $STREAMSETS_SDC_XMX"
+            "\n \n")
+        LogOutput LOGOUT[@]
+        
+    else
+        ResultOutput OK "Current Initial and Maximum heap sizes match. Xms: $STREAMSETS_SDC_XMS    Xmx: $STREAMSETS_SDC_XMX"
+    fi
 }
 
-#=================================== Print most recent 3 shutdown events if available ===================================#
-CheckShutdownEvents()
+#=================================== Check current against min recommended memory ===================================#
+RegisterTest "CheckMinMemory" "Check current against min recommended memory"
+CheckMinMemory()
 {
-    echo -e "\n\nMost Recent 3 Shutdown Events"
-    echo -e "$D$D"
-    last -x 2> /dev/null|grep shutdown 1> /dev/null && /usr/bin/last -x 2> /dev/null|grep shutdown|head -3 || \
-    echo -e "No shutdown events are recorded."
+    CalcMemorySettings
+
+    if [ $STREAMSETS_SDC_RAW_XMX -lt 8589934592 ]; then
+        ResultOutput FAIL "At least 8 GB of heap memory required. Xmx: $STREAMSETS_SDC_XMX"
+        local LOGOUT=("\nStreamSets recommends at least 8 GB of heap memory available for both production and non-production"
+            "\nenvironments: Current Xmx: $STREAMSETS_SDC_XMX"
+            "\n \n")
+        LogOutput LOGOUT[@]
+    elif [[ $STREAMSETS_SDC_RAW_XMX -lt 17179869184 && -z "$NONPROD" ]]; then
+        ResultOutput WARN "At least 16 GB of heap memory required for production. Xmx: $STREAMSETS_SDC_XMX"
+        local LOGOUT=("\nStreamSets recommends at least 16 GB of heap memory available for production environments."
+            "\nTo suppress this warning in the future, set the -n flag. Current Xmx: $STREAMSETS_SDC_XMX"
+            "\n \n")
+        LogOutput LOGOUT[@]
+    else
+        ResultOutput INFO "Heap memory at or over recommended minimums. Xmx: $STREAMSETS_SDC_XMX"
+        local LOGOUT=("\nSufficient memory is available to run StreamSets. Current Xmx: $STREAMSETS_SDC_XMX"
+            "\n \n")
+        LOGOUT[@]
+    fi
 }
 
-#=================================== Print top 5 most memory consuming resources ===================================#
-CheckTopFiveMemoryConsumers()
+#=================================== Check current against max recommended memory ===================================#
+RegisterTest "CheckMaxMemory" "Check current against max recommended memory"
+CheckMaxMemory()
 {
-    echo -e "\n\nTop 5 Memory Resource Hog Processes"
-    echo -e "$D$D"
-    ps -eo pmem,pcpu,pid,ppid,user,stat,args | sort -k 1 -r | head -6|sed 's/$/\n/'
+    CalcMemorySettings
+
+    if [ $STREAMSETS_SDC_RAW_XMX -ge 68719476736 ]; then
+        ResultOutput ERROR "64 GB max heap memory exceeded. Xmx: $STREAMSETS_SDC_XMX" 
+        local LOGOUT=("\nStreamSets recommends no more than 64 GB of heap memory be available. Requiring more memory is often an"
+            "\nindicator that the SDC has reached its carrying capacity. Current Xmx: $STREAMSETS_SDC_XMX"
+            "\n \n")
+        LogOutput LOGOUT[@]
+    else
+        ResultOutput OK "Heap memory under 64 GB limit. Xmx: $STREAMSETS_SDC_XMX" 
+        local LOGOUT=("\nAvailable memory is not excessive (i.e. > 64 GB). Current Xmx: $STREAMSETS_SDC_XMX"
+            "\n \n")
+        LogOutput LOGOUT[@]
+    fi
 }
 
-#=================================== Print top 5 most CPU consuming resources ===================================#
-CheckTopFiveCPUConsumers()
+#=================================== Check % of memory used by StreamSets ===================================#
+RegisterTest "CheckPctOfSysMemory" "Check that % of memory in use by StreamSets is okay." "bc"
+CheckPctOfSysMemory()
 {
-    echo -e "\n\nTop 5 CPU Resource Hog Processes"
-    echo -e "$D$D"
-    ps -eo pcpu,pmem,pid,ppid,user,stat,args | sort -k 1 -r | head -6|sed 's/$/\n/'
+    CalcMemorySettings
+
+    SYSMEM="$(awk '/MemFree/ { printf "%.0f \n", $2*1024 }' /proc/meminfo)"
+    SYSMEM_IN_GB="$(awk '/MemFree/ { printf "%.0f \n", $2/1024/1024 }' /proc/meminfo)"
+    PCT_OF_SYSMEM="$(echo $STREAMSETS_SDC_RAW_XMX/$SYSMEM |bc -l)"
+    PCT_OF_SYSMEM=$(echo $PCT_OF_SYSMEM*100 | bc -l)
+    PCT_OF_SYSMEM=$(printf %0.f $PCT_OF_SYSMEM)
+    if [ $PCT_OF_SYSMEM -gt 75 ]; then
+        ResultOutput WARN "Heap memory exceeds 75% of system memory. Xmx: $STREAMSETS_SDC_XMX    System: ${SYSMEM_IN_GB}g"
+        local LOGOUT=("\nStreamSets recommends that the heap size setting be no larger than 75% of"
+            "\nthe available system memory.Current Xmx: $STREAMSETS_SDC_XMX   Total system memory: ${SYSMEM_IN_GB}g"
+            "\n \n")
+        LogOutput LOGOUT[@]
+    else
+    	ResultOutput OK "Heap memory under 75% of system memory. Xmx: $STREAMSETS_SDC_XMX    System: ${SYSMEM_IN_GB}g"
+        local LOGOUT=("\nAvailable heap memory is below 75% of total system memory."
+            "Current Xmx: $STREAMSETS_SDC_XMX   Total system memory: ${SYSMEM_IN_GB}g"
+            "\n \n")
+        LogOutput LOGOUT[@]
+    fi
 }
 
 #======================================================================================================================#
