@@ -443,8 +443,8 @@ CheckPctOfSysMemory()
 {
     CalcMemorySettings
 
-    SYSMEM="$(awk '/MemFree/ { printf "%.0f \n", $2*1024 }' /proc/meminfo)"
-    SYSMEM_IN_GB="$(awk '/MemFree/ { printf "%.0f \n", $2/1024/1024 }' /proc/meminfo)"
+    SYSMEM="$(awk '/MemTotal/ { printf "%.0f \n", $2*1024 }' /proc/meminfo)"
+    SYSMEM_IN_GB="$(awk '/MemTotal/ { printf "%.0f \n", $2/1024/1024 }' /proc/meminfo)"
     PCT_OF_SYSMEM="$(echo $STREAMSETS_SDC_RAW_XMX/$SYSMEM |bc -l)"
     PCT_OF_SYSMEM=$(echo $PCT_OF_SYSMEM*100 | bc -l)
     PCT_OF_SYSMEM=$(printf %0.f $PCT_OF_SYSMEM)
