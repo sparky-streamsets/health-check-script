@@ -1,10 +1,11 @@
 #!/bin/bash
 
 # Set defaults and initialize variables
-declare -a TESTS_ALL 					# Test functions should add their name to this array
-declare -a TESTS_EXCLUDE 			# List of tests that should not be executed
-declare -a TESTS_INCLUDE  		# List of tests that should be excecuted.
+declare -a TESTS_ALL          # Test functions should add their name to this array
+declare -a TESTS_EXCLUDE      # List of tests that should not be executed
+declare -a TESTS_INCLUDE      # List of tests that should be excecuted.
 declare -A TESTS_DESCRIPTION  # Description of test.  Indexed by the test name.
+declare -a TESTS_TARGET       # Capture whether to run a test based on the selected target product
 declare -a REQUIRED_PROGRAMS  # Add any dependencies into this array
 declare -a LOGOUTPUT          # capture string output to be displayed in log file
 TARGET_PRODUCT=all # Can be all, sdc, dpm|sch, transformer|xfm  # Tests can use this to know what configurations to test
@@ -33,7 +34,7 @@ fi
 function HelpFunction()
 {
     echo ""
-    echo "Usage:$0 (-h|--help) (-u|--user) <svcacct> (-p|--process) <pid> --exclude <functionlist> --include <functionlist> (-n|--no-prod)"
+    echo "Usage:$0 (-h|--help) (-u|--user) <svcacct> (-p|--process) <pid> --exclude <functionlist> --include <functionlist> (-n|--no-prod) (-t|--target <targetapp>)"
     echo -e "\n\n\tAvailable functions: CheckSupportedOS,CheckJVMVersion,CheckUlimit,PrintOSDetails,PrintSystemUptime,"
     echo -e "\tFindReadOnlyFileSystems,FindCurrentlyMountedFileSystems,CheckDiskUsage,FindZombieProcesses,"
     echo -e "\tCheckSwapUtilization,CheckProcessorUtilization,CheckMemorySettingsMatch,CheckMinMemory,"
@@ -45,15 +46,17 @@ function HelpFunction()
     echo -e "\t-n | --no-prod                     set this to turn off certain warnings for non-production environments"
     echo -e "\t-x | --exclude <functionlist>      comma-separated list of functions not to execute"
     echo -e "\t-i | --include <functionlist>      comma-separated list of functions to execute (only execute these functions)\n"
+    echo -e "\t-t | --target <targetproduct>      run only product-specific tests (possible values: *all*,sdc,dpm|sch,transformer|xfm)"
     exit 1 # Exit script after printing help
 }
 function RegisterTest()
 {
-    # RegisterTest TestFunctionName "Description of the test" "any,programs,this,is,dependent,on"
+    # RegisterTest TestFunctionName "Description of the test" "target product(s)" "any,programs,this,is,dependent,on"
     #echo "Registering ${#TESTS_ALL[@]} $1"
     TESTS_ALL+=($1)
     [ -n "$2" ] && TESTS_DESCRIPTION[$1]="$2"
-    [ -n "$3" ] && REQUIRED_PROGRAMS+=( $( echo "$3" | sed 's/,/ /g') )
+    [ -n "$3" ] && TESTS_TARGET[$1]="$3"
+    [ -n "$4" ] && REQUIRED_PROGRAMS+=( $( echo "$3" | sed 's/,/ /g') )
 }
 function ResultOutput
 {
@@ -61,22 +64,29 @@ function ResultOutput
     case "$1" in
         OK|PASS|0)
             echo -e "$GCOLOR ${FUNCNAME[1]} $2"
+            pass_fail=OK
             ;;
         ERR|ERROR|FAIL|1)
             echo -e "$CCOLOR ${FUNCNAME[1]} $2"
+            pass_fail=FAIL
             ;;
         WARN|2)
             echo -e "$WCOLOR ${FUNCNAME[1]} $2"
+            pass_fail=WARN
             ;;
         *)
             echo -e "$ICOLOR $2"
+            pass_fail=UNKNOWN
             ;;
     esac
+	[ -n "$3" ] && declare -a LOG_OUTPUT=("${!3}")
+    LOGOUTPUT+="==================== [$pass_fail] ${FUNCNAME[1]} ====================\n${LOG_OUTPUT[@]}" &> $LOGFILE
 }
+
 function LogOutput
 {
 	[ -n "$1" ] && declare -a LOG_OUTPUT=("${!1}")
-    LOGOUTPUT+="==================== ${FUNCNAME[1]} Log Output ====================\n${LOG_OUTPUT[@]}"
+    LOGOUTPUT+="==================== ${FUNCNAME[1]} ====================\n${LOG_OUTPUT[@]}" &> $LOGFILE
 }
 
 unset PARAMS
@@ -111,6 +121,10 @@ while (( "$#" )); do
             NONPROD="true"
             shift
             ;;
+        -t|--target)
+            TARGET_PRODUCT=$2
+            shift 2
+            ;;
         --) # end argument parsing
             shift
             break
@@ -133,7 +147,7 @@ IUSAGE=$(df -PThi|egrep -iw "ext4|ext3|xfs|gfs|gfs2|btrfs"|grep -v "loop"|sort -
 
 #=================================== PreflightChecks ===================================#
 #=================================== Check supported OS ===================================#
-RegisterTest "CheckSupportedOS" "Ensure that this is a supported operating system"
+RegisterTest "CheckSupportedOS" "Ensure that this is a supported operating system" "all"
 function CheckSupportedOS() {
     # Per SDC and SCH install guides, we officially supported the OSes listed in the supported_os variable below
     # Our products may run on other OSes, but they have not been tested and verified by StreamSets
@@ -141,34 +155,43 @@ function CheckSupportedOS() {
     # WARN - Detected OS is not listed among StreamSets certified platforms
     # OK - Detected OS has been certified by StreamSets
 
-    SUPPORTED_OS=("CentOS release 6" "CentOS Linux release 7" 
+	local testResult=OK
+	local report="Mac OSX is a supported OS"
+	local logOut
+    local supportedOS=("CentOS release 6" "CentOS Linux release 7" 
         "Oracle Linux Server release 6" "Oracle Linux Server release 7" 
         "Red Hat Enterprise Linux Server release 6" "Red Hat Enterprise Linux Server release 7" 
         "Ubuntu 14.04" "Ubuntu 16.04")
+        
     if [[ `uname` == "Darwin" ]]; then
-        ResultOutput OK "Mac OSX is a supported OS"
+        logOut=("Mac OSX is a supported OS"
+                    "\n \n")
     else
-        OS=`[ -x /usr/bin/lsb_release ] &&  echo -e "Operating System :" $(lsb_release -d|awk -F: '{print $2}'|sed -e 's/^[ \t]*//')  || \
+        local os=`[ -x /usr/bin/lsb_release ] &&  echo -e "Operating System :" $(lsb_release -d|awk -F: '{print $2}'|sed -e 's/^[ \t]*//')  || \
         echo -e "\nOperating System :" $(cat /etc/system-release)`
-        FOUND="false"
-        for i in $( echo "$SUPPORTED_OS")
+        local found="false"
+        for i in $( echo "$supportedOS")
         do
         {
-            if [[ "$OS" == *"$i"* ]]; then
-                FOUND="true"
-                ResultOutput OK "$OS is a supported OS"
+            if [[ "$os" == *"$i"* ]]; then
+                found="true"
+                report="$os is a supported OS"
+                logOut=("$os is a supported OS"
+                    "\n \n")
         	fi
         }
         done
-        if [[ $FOUND == "false" ]]; then
-            ResultOutput WARN "$OS is not an officially supported OS"
-            local LOGOUT=("The following operating systems are officially supported by StreamSets: Mac OSX,"
+        if [[ $found == "false" ]]; then
+        	testResult=WARN
+        	report="$os is not an officially supported OS"
+            logOut=("The following operating systems are officially supported by StreamSets: Mac OSX,"
                 "CentOS 6.x or 7.x, Oracle Linux 6.x or 7.x, RHEL 6.x or 7.x, and Ubuntu 14.04 or 16.04 LTS."
                 "Other operating systems may still work but haven't been tested and certified by StreamSets"
                 "\n \n")
-            LogOutput LOGOUT[@]
         fi
     fi
+    
+    ResultOutput $testResult "${report}" logOut[@]
 }
 
 #=================================== Check compatible JVM version ===================================#
@@ -181,6 +204,10 @@ function CheckJVMVersion() {
     # WARN - JVM is not officially supported or has reached EOL
     # OK - OpenJDK 8 detected and available
     
+    local testResult=OK
+    local report="StreamSets-recommended OpenJDK 8 installed and available"
+    local logOut
+    
     if type -p java &>/dev/null
     then
         _java=java
@@ -188,7 +215,10 @@ function CheckJVMVersion() {
     then
         _java="$JAVA_HOME/bin/java"
     else
-         ResultOutput FAIL "No JVM installed. Please install OpenJDK 8."
+        testResult=FAIL
+        report="No JVM installed. Please install OpenJDK 8."
+        logOut=("${report}"
+            "\n \n")
     fi
     
     if [[ "$_java" ]]
@@ -196,24 +226,27 @@ function CheckJVMVersion() {
         vendor=$("$_java" -version 2>&1 | awk -F '"' '/version/ {print $1}')
         version=$("$_java" -version 2>&1 | head -1 | cut -d'"' -f2 | sed '/^1\./s///' | cut -d'.' -f1)
         if [[ "$vendor" != *"openjdk"* ]]; then
-            ResultOutput WARN "JVM vendor is not OpenJDK"
-            local LOGOUT=("We noticed that you're not using a JVM provided by OpenJDK. JVMs provided by other"
+            testResult=WARN
+            report="JVM vendor is not OpenJDK"
+            logOut=("We noticed that you're not using a JVM provided by OpenJDK. JVMs provided by other"
                 "vendors (i.e. Oracle, IBM, JRocket) will either not be compatible or will have reached EOL"
                 "on JVM version 8. StreamSets recommends installing OpenJDK 8."
                 "\n \n")
-            LogOutput LOGOUT[@]
         elif [[ "$version" != 8 ]]
         then
-        	ResultOutput WARN "JVM version is not 8"
-        	local LOGOUT=("We noticed that your JVM version is not 8. Unfortunately, StreamSets is not yet"
+            testResult=WARN
+            report="JVM version is not 8"
+        	logOut=("We noticed that your JVM version is not 8. Unfortunately, StreamSets is not yet"
         	    "compatible with newer versions of the JVM, and older versions have reached EOL. StreamSets"
         	    "recommends installing OpenJDK 8"
                 "\n \n")
-            LogOutput LOGOUT[@]
         else
-            ResultOutput OK "StreamSets-recommended OpenJDK 8 installed and available"
+            logOut=("${report}"
+                "\n \n")
         fi
     fi
+    
+    ResultOutput $testResult "${report}" logOut[@]
 }
 
 #=================================== Check ulimit max file handle setting ===================================#
@@ -225,16 +258,23 @@ function CheckUlimit() {
     # FAIL - ulimit setting is too low
     # OK - ulimit setting is good
     
+    local testResult=OK
+    local report="Hard and soft open file limit setting is correct"
+    local logOut
+    
     if [[ `ulimit -n` < 32768 ]]
     then
-        ResultOutput FAIL "Open file limit setting too low (< 32768)"
-        local log_output=( "StreamSets Data Collector requires maximum hard and soft open file limit setting of 32768."
+        testResult=FAIL
+        report="Open file limit setting too low (< 32768)"
+        logOut=("StreamSets Data Collector requires maximum hard and soft open file limit setting of 32768."
         	"See https://access.redhat.com/solutions/61334 for info on how to set file limit"
-            "\n \n" )
-        LogOutput log_output[@]
+            "\n \n")
     else
-        ResultOutput OK "Hard and soft open file limit setting is correct"
+        logOut=("${report}"
+            "\n \n") 
     fi
+    
+    ResultOutput $testResult "${report}" logOut[@]
 }
 
 #=================================== Check NTP service ===================================#
@@ -247,8 +287,9 @@ function SchPrereqNtp() {
     # WARN - NTP is running and reachable.  But the server is not in sync.
     # OK - NTP is running and ntpq output indicates it is synced with a server
 
-    local testResult="FAIL"
+    local testResult=FAIL
     local report="ntp service required but no ntp utilities found.  ntpstat missing."
+    
     if ( which ntpstat >/dev/null )
     then
         # ntpstat exists.  Use it to determine if ntp is working
@@ -293,7 +334,10 @@ function SchPrereqNtp() {
             report="ntp service is running and in sync with ${selected_server}"
         fi
     fi
-    ResultOutput $testResult "${report}"
+    
+    local logOut=("${report}"
+        "\n \n")
+    ResultOutput $testResult "${report}" logOut[@]
 }
 
 #=================================== Check CPU Thread Count ===================================#
@@ -307,7 +351,7 @@ function SchPrereqCPUThreads() {
     # OK - Have more than minimum
 
     sch_min_threads=8
-    local testResult="FAIL"
+    local testResult=FAIL
     local report="Unable to access core and thread counts in /proc/cpuinfo"
     local num_cores=$( sed -n '/cpu cores/ {s/.* //g;p;q}' /proc/cpuinfo )
     local num_threads=$( grep -c processor /proc/cpuinfo )
@@ -315,18 +359,22 @@ function SchPrereqCPUThreads() {
     then
         if [ $num_threads -lt $sch_min_threads ]
         then
-            testResult="FAIL"
+            testResult=FAIL
             report="Number of CPU threads/cores is $num_threads which is less than minimum of $sch_min_threads"
         elif [ $num_threads -eq $sch_min_threads ]
         then
-            testResult="WARN"
+            testResult=WARN
             report="Number of CPU threads/cores is $num_threads which only meets the minimum of $sch_min_threads"
         else
-            testResult="OK"
+            testResult=OK
             report="Number of CPU threads/cores is $num_threads which exceeds the minimum of $sch_min_threads"
         fi
     fi
-    ResultOutput $testResult "${report}"
+    
+    local logOut=("${report}"
+        "\n \n")
+        
+    ResultOutput $testResult "${report}" logOut[@]
 }
 
 #=================================== Print Operating System Details ===================================#
@@ -336,16 +384,15 @@ function PrintOSDetails() {
     # Possible results:
     # N/A
     
-    HOSTNAME=`hostname -f &> /dev/null && printf "Hostname : $(hostname -f)" || printf "Hostname : $(hostname -s)"`
-
-    KERNEL=$(echo -e "Kernel Version : " $(uname -r))
-
-    OSARCH=$(printf "OS Architecture : "$(arch | grep x86_64 &> /dev/null) && printf " 64 Bit OS\n"  || printf " 32 Bit OS\n")
-    local LOGOUT=("\n${HOSTNAME}"
-        "\n${KERNEL}"
-        "\n${OSARCH}"
+    local hostname=`hostname -f &> /dev/null && printf "Hostname : $(hostname -f)" || printf "Hostname : $(hostname -s)"`
+    local kernel=$(echo -e "Kernel Version : " $(uname -r))
+    local osarch=$(printf "OS Architecture : "$(arch | grep x86_64 &> /dev/null) && printf " 64 Bit OS\n"  || printf " 32 Bit OS\n")
+    
+    local logOut=("${hostname}"
+        "\n${kernel}"
+        "\n${osarch}"
         "\n \n")
-    LogOutput LOGOUT[@]
+    LogOutput logOut[@]
 }
 
 #=================================== Print system uptime ===================================#
@@ -355,20 +402,24 @@ function PrintSystemUptime() {
     # Possible results:
     # N/A
     
-    UPTIME=$(uptime)
-    CURR_UPTIME=`echo $UPTIME|grep day &> /dev/null`
+    local uptime=$(uptime)
+    local currUptime=`echo $uptime|grep day &> /dev/null`
+    local sysUptime=""
+    
     if [ $? != 0 ]
         then
-            CURR_UPTIME=`echo $UPTIME|grep -w min &> /dev/null` && SYS_UPTIME=$(echo -e "System Uptime : "$(echo $UPTIME|awk '{print $2" by "$3}'|sed -e 's/,.*//g')" minutes") \
-            || SYS_UPTIME=`echo -e "System Uptime : "$(echo $UPTIME|awk '{print $2" by "$3" "$4}'|sed -e 's/,.*//g')" hours"`
+            currUptime=`echo $uptime|grep -w min &> /dev/null` && sysUptime=$(echo -e "System Uptime : "$(echo $uptime|awk '{print $2" by "$3}'|sed -e 's/,.*//g')" minutes") \
+            || sysUptime=`echo -e "System Uptime : "$(echo $uptime|awk '{print $2" by "$3" "$4}'|sed -e 's/,.*//g')" hours"`
     else
-        SYS_UPTIME=`echo -e "System Uptime : " $(echo $UPTIME|awk '{print $2" by "$3" "$4" "$5" hours"}'|sed -e 's/,//g')`
+        sysUptime=`echo -e "System Uptime : " $(echo $uptime|awk '{print $2" by "$3" "$4" "$5" hours"}'|sed -e 's/,//g')`
     fi
-    CURR_DATETIME=$(echo -e "Current System Date & Time : "$(date +%c))
-    local LOGOUT=("\n${SYS_UPTIME}"
-        "\n${CURR_DATETIME}"
+    
+    local currDateTime=$(echo -e "Current System Date & Time : "$(date +%c))
+    
+    local logOut=("${sysUptime}"
+        "\n${currDateTime}"
         "\n \n")
-    LogOutput LOGOUT[@]
+    LogOutput logOut[@]
 }
         
 #=================================== Check for any read-only file systems ===================================#
@@ -378,10 +429,10 @@ function FindReadOnlyFileSystems() {
     # Possible results:
     # N/A
     
-    READONLY=`echo "$MOUNT"|grep -w \(ro\) && echo -e "\n.....Read Only file system[s] found"|| echo -e ".....No read-only file system[s] found. "`
-    local LOGOUT=("\n${READONLY}"
+    local readonly=`echo "$MOUNT"|grep -w \(ro\) && echo -e "\n.....Read Only file system[s] found"|| echo -e ".....No read-only file system[s] found. "`
+    local logOut=("${readonly}"
         "\n \n")
-    LogOutput LOGOUT[@]
+    LogOutput logOut[@]
 }
 
 #=================================== Check for currently mounted file systems ===================================#
@@ -391,10 +442,10 @@ function FindCurrentlyMountedFileSystems() {
     # Possible results:
     # N/A
     
-    CURRENT_MOUNT_FS=`echo "$MOUNT"|column -t`
-    local LOGOUT=("\n${CURRENT_MOUNT_FS}"
+    local currentMountFS=`echo "$MOUNT"|column -t`
+    local logOut=("${currentMountFS}"
         "\n \n")
-    LogOutput LOGOUT[@]
+    LogOutput logOut[@]
 }
 
 #=================================== Check disk usage on all mounted file systems ===================================#
@@ -406,18 +457,26 @@ function CheckDiskUsage() {
     # WARN: At least one mounted disk is between 90 and 95% usage
     # OK: Mounted disc usage less than 90%
     
-    COL1=$(echo "$FS_USAGE"|awk '{print $1 " "$7}')
-    COL2=$(echo "$FS_USAGE"|awk '{print $6}'|sed -e 's/%//g')
+    local col1=$(echo "$FS_USAGE"|awk '{print $1 " "$7}')
+    local col2=$(echo "$FS_USAGE"|awk '{print $6}'|sed -e 's/%//g')
 
-    for i in $(echo "$COL2"); do
+    local testResult=OK
+    local report="disk usage under 90%: $(echo $col1 $i)%"
+    local logOut
+    
+    for i in $(echo "$col2"); do
     {
         if [ $i -ge 95 ]; then
-            ResultOutput FAIL "disk usage exceeds 95%: $(echo $COL1 $i)%"
+            testResult=FAIL 
+            report="disk usage exceeds 95%: $(echo $col1 $i)%"
         elif [[ $i -ge 90 && $i -lt 95 ]]; then
-            ResultOutput WARN "disk usage high (90 - 95%): $(echo $COL1 $i)%"
-        else
-            ResultOutput OK "disk usage under 90%: $(echo $COL1 $i)%"
+            testResult=WARN 
+            report="disk usage high (90 - 95%): $(echo $col1 $i)%"
         fi
+        
+        logOut=("${report}"
+            "\n \n")
+        ResultOutput $testResult "${report}" logOut[@]
     }
     done
 }
@@ -430,20 +489,27 @@ function FindZombieProcesses() {
     # WARN: Non-responsive processes listed in the logs
     # OK: No non-responsive processes found
     
+    local testResult=OK
+    local report="No zombie processes found on the system."
+    local logOut
+    
     ps -eo stat|grep -w Z 1>&2 > /dev/null
     if [ $? == 0 ]; then
-    	ResultOutput WARN "Zombie processes found on system. Check log for more info."
-        local LOGOUT=("Number of zombie process on the system are : $(ps -eo stat|grep -w Z|wc -l)"
+        testResult=WARN
+        report="Zombie processes found on system. Check log for more info."
+        logOut=("Number of zombie process on the system are : $(ps -eo stat|grep -w Z|wc -l)"
             "\n  Details of each zombie processes found   "
             "  $D")
         ZPROC=$(ps -eo stat,pid|grep -w Z|awk '{print $2}')
         for i in $(echo "$ZPROC"); do
-            LOGOUT+=(`ps -o pid,ppid,user,stat,args -p $i`)
+            logOut+=(`ps -o pid,ppid,user,stat,args -p $i`)
         done
-        LogOutput LOGOUT[@]
     else
-        ResultOutput OK "No zombie processes found on the system."
+        logOut=("${report}"
+            "\n \n")
     fi
+    
+    ResultOutput $testResult "${report}" logOut[@]
 }
 
 #=================================== Check for SWAP Utilization ===================================#
@@ -453,14 +519,14 @@ function CheckSwapUtilization() {
     # Possible results:
     # N/A
     
-    SWAP1=`echo -e "Total Swap Memory in MiB : "$(grep -w SwapTotal /proc/meminfo|awk '{print $2/1024}')", in GiB : "\
+    local swap1=`echo -e "Total Swap Memory in MiB : "$(grep -w SwapTotal /proc/meminfo|awk '{print $2/1024}')", in GiB : "\
     $(grep -w SwapTotal /proc/meminfo|awk '{print $2/1024/1024}')`
-    SWAP2=`echo -e "Swap Free Memory in MiB : "$(grep -w SwapFree /proc/meminfo|awk '{print $2/1024}')", in GiB : "\
+    local swap2=`echo -e "Swap Free Memory in MiB : "$(grep -w SwapFree /proc/meminfo|awk '{print $2/1024}')", in GiB : "\
     $(grep -w SwapFree /proc/meminfo|awk '{print $2/1024/1024}')`
-    local LOGOUT=("\n$(echo $SWAP1)" 
-        "\n$(echo $SWAP2)"
+    local logOut=("$(echo $swap1)" 
+        "\n$(echo $swap2)"
         "\n \n")
-    LogOutput LOGOUT[@]
+    LogOutput logOut[@]
 }
 
 #=================================== Check for Processor Utilization (current data) ===================================#
@@ -470,10 +536,10 @@ function CheckProcessorUtilization() {
     # Possible results:
     # N/A
     
-    local LOGOUT=("\nCurrent CPU Utilization Summary :\n"
+    local logOut=("Current CPU Utilization Summary :\n"
         "\n`mpstat|tail -2`"
         "\n \n")
-    LogOutput LOGOUT[@]
+    LogOutput logOut[@]
 }
 
 #=================================== ServiceChecks ===================================#
@@ -523,17 +589,23 @@ function CheckMemorySettingsMatch() {
     
 	CalcMemorySettings
 	
+	local testResult=OK
+	local report="Current Initial and Maximum heap sizes match. Xms: $STREAMSETS_SDC_XMS    Xmx: $STREAMSETS_SDC_XMX"
+	local logOut
+	
     if [ $STREAMSETS_SDC_RAW_XMS -ne $STREAMSETS_SDC_RAW_XMX ]; then
-        ResultOutput WARN "Initial and maximum heap sizes different. Xms: $STREAMSETS_SDC_XMS    Xmx: $STREAMSETS_SDC_XMX"
-        local LOGOUT=("\nStreamSets recommends following the industry-standard best practice of setting the"
+        testResult=WARN 
+        report="Initial and maximum heap sizes different. Xms: $STREAMSETS_SDC_XMS    Xmx: $STREAMSETS_SDC_XMX"
+        logOut=("StreamSets recommends following the industry-standard best practice of setting the"
             "\ninitial and maximum heap sizes to the same value."
             "\nCurrent Xms: $STREAMSETS_SDC_XMS    Current Xmx: $STREAMSETS_SDC_XMX"
             "\n \n")
-        LogOutput LOGOUT[@]
-        
     else
-        ResultOutput OK "Current Initial and Maximum heap sizes match. Xms: $STREAMSETS_SDC_XMS    Xmx: $STREAMSETS_SDC_XMX"
+        logOut=("${report}"
+            "\n \n")
     fi
+    
+    ResultOutput $testResult "${report}" logOut[@]
 }
 
 #=================================== Check current against min recommended memory ===================================#
@@ -547,25 +619,29 @@ function CheckMinMemory() {
     # OK: At least 8 GB (non-prod) or 16 GB (prod) heap space has been allocated
     
     CalcMemorySettings
+    
+    local testResult=INFO
+    local report="Heap memory at or over recommended minimums. Xmx: $STREAMSETS_SDC_XMX"
+    local logOut
 
     if [ $STREAMSETS_SDC_RAW_XMX -lt 8589934592 ]; then
-        ResultOutput FAIL "At least 8 GB of heap memory required. Xmx: $STREAMSETS_SDC_XMX"
-        local LOGOUT=("\nStreamSets recommends at least 8 GB of heap memory available for both production and non-production"
+        testResult=FAIL 
+        report="At least 8 GB of heap memory required. Xmx: $STREAMSETS_SDC_XMX"
+        logOut=("StreamSets recommends at least 8 GB of heap memory available for both production and non-production"
             "\nenvironments: Current Xmx: $STREAMSETS_SDC_XMX"
             "\n \n")
-        LogOutput LOGOUT[@]
     elif [[ $STREAMSETS_SDC_RAW_XMX -lt 17179869184 && -z "$NONPROD" ]]; then
-        ResultOutput WARN "At least 16 GB of heap memory required for production. Xmx: $STREAMSETS_SDC_XMX"
-        local LOGOUT=("\nStreamSets recommends at least 16 GB of heap memory available for production environments."
+        testResult=WARN 
+        report="At least 16 GB of heap memory required for production. Xmx: $STREAMSETS_SDC_XMX"
+        logOut=("StreamSets recommends at least 16 GB of heap memory available for production environments."
             "\nTo suppress this warning in the future, set the -n flag. Current Xmx: $STREAMSETS_SDC_XMX"
             "\n \n")
-        LogOutput LOGOUT[@]
     else
-        ResultOutput INFO "Heap memory at or over recommended minimums. Xmx: $STREAMSETS_SDC_XMX"
-        local LOGOUT=("\nSufficient memory is available to run StreamSets. Current Xmx: $STREAMSETS_SDC_XMX"
+        logOut=("Sufficient memory is available to run StreamSets. Current Xmx: $STREAMSETS_SDC_XMX"
             "\n \n")
-        LOGOUT[@]
     fi
+    
+    ResultOutput $testResult "${report}" logOut[@]
 }
 
 #=================================== Check current against max recommended memory ===================================#
@@ -578,19 +654,23 @@ function CheckMaxMemory() {
     # OK: Less than 64 GB heap space detected
     
     CalcMemorySettings
+    
+    local testResult=OK
+    local report="Heap memory under 64 GB limit. Xmx: $STREAMSETS_SDC_XMX"
+    local logOut
 
     if [ $STREAMSETS_SDC_RAW_XMX -ge 68719476736 ]; then
-        ResultOutput ERROR "64 GB max heap memory exceeded. Xmx: $STREAMSETS_SDC_XMX" 
-        local LOGOUT=("\nStreamSets recommends no more than 64 GB of heap memory be available. Requiring more memory is often an"
+        testResult=ERROR 
+        report="64 GB max heap memory exceeded. Xmx: $STREAMSETS_SDC_XMX" 
+        logOut=("StreamSets recommends no more than 64 GB of heap memory be available. Requiring more memory is often an"
             "\nindicator that the SDC has reached its carrying capacity. Current Xmx: $STREAMSETS_SDC_XMX"
             "\n \n")
-        LogOutput LOGOUT[@]
     else
-        ResultOutput OK "Heap memory under 64 GB limit. Xmx: $STREAMSETS_SDC_XMX" 
-        local LOGOUT=("\nAvailable memory is not excessive (i.e. > 64 GB). Current Xmx: $STREAMSETS_SDC_XMX"
+        logOut=("Available memory is not excessive (i.e. > 64 GB). Current Xmx: $STREAMSETS_SDC_XMX"
             "\n \n")
-        LogOutput LOGOUT[@]
     fi
+    
+    ResultOutput $testResult "${report}" logOut[@]
 }
 
 #=================================== Check % of memory used by StreamSets ===================================#
@@ -605,25 +685,29 @@ function CheckPctOfSysMemory() {
     # OK: StreamSets consumes less than 75% of available system memory
     
     CalcMemorySettings
-
-    SYSMEM="$(awk '/MemTotal/ { printf "%.0f \n", $2*1024 }' /proc/meminfo)"
-    SYSMEM_IN_GB="$(awk '/MemTotal/ { printf "%.0f \n", $2/1024/1024 }' /proc/meminfo)"
-    PCT_OF_SYSMEM="$(echo $STREAMSETS_SDC_RAW_XMX/$SYSMEM |bc -l)"
-    PCT_OF_SYSMEM=$(echo $PCT_OF_SYSMEM*100 | bc -l)
-    PCT_OF_SYSMEM=$(printf %0.f $PCT_OF_SYSMEM)
-    if [ $PCT_OF_SYSMEM -gt 75 ]; then
-        ResultOutput WARN "Heap memory exceeds 75% of system memory. Xmx: $STREAMSETS_SDC_XMX    System: ${SYSMEM_IN_GB}g"
-        local LOGOUT=("\nStreamSets recommends that the heap size setting be no larger than 75% of"
-            "\nthe available system memory.Current Xmx: $STREAMSETS_SDC_XMX   Total system memory: ${SYSMEM_IN_GB}g"
+    
+    local testResult=OK
+    local report=""
+    local logOut
+    local sysmem="$(awk '/MemTotal/ { printf "%.0f \n", $2*1024 }' /proc/meminfo)"
+    local sysmemInGB="$(awk '/MemTotal/ { printf "%.0f \n", $2/1024/1024 }' /proc/meminfo)"
+    local pctOfSysmem="$(echo $STREAMSETS_SDC_RAW_XMX/$sysmem |bc -l)"
+    pctOfSysmem=$(echo $pctOfSysmem*100 | bc -l)
+    pctOfSysmem=$(printf %0.f $pctOfSysmem)
+    if [ $pctOfSysmem -gt 75 ]; then
+        testResult=WARN 
+        report="Heap memory exceeds 75% of system memory. Xmx: $STREAMSETS_SDC_XMX    System: ${sysmemInGB}g"
+        logOut=("StreamSets recommends that the heap size setting be no larger than 75% of"
+            "\nthe available system memory.Current Xmx: $STREAMSETS_SDC_XMX   Total system memory: ${sysmemInGB}g"
             "\n \n")
-        LogOutput LOGOUT[@]
     else
-    	ResultOutput OK "Heap memory under 75% of system memory. Xmx: $STREAMSETS_SDC_XMX    System: ${SYSMEM_IN_GB}g"
-        local LOGOUT=("\nAvailable heap memory is below 75% of total system memory."
-            "Current Xmx: $STREAMSETS_SDC_XMX   Total system memory: ${SYSMEM_IN_GB}g"
+    	report="Heap memory under 75% of system memory. Xmx: $STREAMSETS_SDC_XMX    System: ${sysmemInGB}g"
+        logOut=("Available heap memory is below 75% of total system memory."
+            "Current Xmx: $STREAMSETS_SDC_XMX   Total system memory: ${sysmemInGB}g"
             "\n \n")
-        LogOutput LOGOUT[@]
     fi
+    
+    ResultOutput $testResult "${report}" logOut[@]
 }
 
 #======================================================================================================================#
