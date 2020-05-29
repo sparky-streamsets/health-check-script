@@ -5,10 +5,10 @@ declare -a TESTS_ALL          # Test functions should add their name to this arr
 declare -a TESTS_EXCLUDE      # List of tests that should not be executed
 declare -a TESTS_INCLUDE      # List of tests that should be excecuted.
 declare -A TESTS_DESCRIPTION  # Description of test.  Indexed by the test name.
-declare -a TESTS_TARGET       # Capture whether to run a test based on the selected target product
+declare -A TESTS_TARGET       # Capture whether to run a test based on the selected target product
 declare -a REQUIRED_PROGRAMS  # Add any dependencies into this array
 declare -a LOGOUTPUT          # capture string output to be displayed in log file
-TARGET_PRODUCT=all # Can be all, sdc, dpm|sch, transformer|xfm  # Tests can use this to know what configurations to test
+TARGET_PRODUCT="sdc"          # Can be sdc, dpm|sch, transformer|xfm  # Tests can use this to know what configurations to test
 NONPROD=false
 OWNER="sdc"
 LOGFILE="health_check_result_$(date +%s).log"
@@ -31,7 +31,7 @@ if [ $COLOR == y ]; then
 fi
 
 #=================================== Base functions ===================================#
-function HelpFunction()
+function HelpFunction
 {
     echo ""
     echo "Usage:$0 (-h|--help) (-u|--user) <svcacct> (-p|--process) <pid> --exclude <functionlist> --include <functionlist> (-n|--no-prod) (-t|--target <targetapp>)"
@@ -46,18 +46,35 @@ function HelpFunction()
     echo -e "\t-n | --no-prod                     set this to turn off certain warnings for non-production environments"
     echo -e "\t-x | --exclude <functionlist>      comma-separated list of functions not to execute"
     echo -e "\t-i | --include <functionlist>      comma-separated list of functions to execute (only execute these functions)\n"
-    echo -e "\t-t | --target <targetproduct>      run only product-specific tests (possible values: *all*,sdc,dpm|sch,transformer|xfm)"
+    echo -e "\t-t | --target <targetproduct>      run product-specific tests (possible values: *sdc*,dpm|sch,transformer|xfm)"
     exit 1 # Exit script after printing help
 }
-function RegisterTest()
+
+function RegisterTest
 {
-    # RegisterTest TestFunctionName "Description of the test" "target product(s)" "any,programs,this,is,dependent,on"
-    #echo "Registering ${#TESTS_ALL[@]} $1"
+    # RegisterTest TestFunctionName "Description of the test" "target product" "any,programs,this,is,dependent,on"
+    #echo "Registering ${#TESTS_ALL[@]} $1 $2 $3 $4"
     TESTS_ALL+=($1)
     [ -n "$2" ] && TESTS_DESCRIPTION[$1]="$2"
     [ -n "$3" ] && TESTS_TARGET[$1]="$3"
-    [ -n "$4" ] && REQUIRED_PROGRAMS+=( $( echo "$3" | sed 's/,/ /g') )
+    [ -n "$4" ] && REQUIRED_PROGRAMS+=( $( echo "$4" | sed 's/,/ /g') )
 }
+
+function RegisterProduct
+{
+    case "$1" in
+        dpm|sch)
+            TARGET_PRODUCT="dpm"
+            ;;
+        transformer|xfm)
+            TARGET_PRODUCT="xfm"
+            ;;
+        *)
+            TARGET_PRODUCT="sdc"
+            ;;
+    esac
+}
+
 function ResultOutput
 {
     # ResultOutput pass_fail_warn_info short_message optional_long_message
@@ -96,9 +113,9 @@ while (( "$#" )); do
             HelpFunction
             exit 0
             ;;
-        --product)
+        -t|--target)
             # Specify which StreamSets product this should execute for
-            TARGET_PRODUCT=$2
+            RegisterProduct $2
             shift 2
             ;;
         -u|--user)
@@ -120,10 +137,6 @@ while (( "$#" )); do
         -n|--no-prod)
             NONPROD="true"
             shift
-            ;;
-        -t|--target)
-            TARGET_PRODUCT=$2
-            shift 2
             ;;
         --) # end argument parsing
             shift
@@ -195,7 +208,7 @@ function CheckSupportedOS() {
 }
 
 #=================================== Check compatible JVM version ===================================#
-RegisterTest "CheckJVMVersion" "Ensure that a compatible JVM is installed and available"
+RegisterTest "CheckJVMVersion" "Ensure that a compatible JVM is installed and available" "all"
 function CheckJVMVersion() {
     # Per SDC and SCH install guides, the only currently supported JVM that hasn't reached EOL is
     # OpenJDK 8. TODO: revisit this once JVM 11 support is officially added
@@ -250,7 +263,7 @@ function CheckJVMVersion() {
 }
 
 #=================================== Check ulimit max file handle setting ===================================#
-RegisterTest "CheckUlimit" "Ensure that hard and soft open file limit setting is set to required maximum: 32768"
+RegisterTest "CheckUlimit" "Ensure that hard and soft open file limit setting is set to required maximum: 32768" "sdc"
 function CheckUlimit() {
     # Per SDC install guide, the maximum hard and soft file limit should be at least 32768. On most Linux OSes
     # the default limit is 1024
@@ -278,7 +291,7 @@ function CheckUlimit() {
 }
 
 #=================================== Check NTP service ===================================#
-RegisterTest "SchPrereqNtp" "Verify ntp service is running and working."
+RegisterTest "SchPrereqNtp" "Verify ntp service is running and working." "dpm"
 function SchPrereqNtp() {
     # Per SCH install guide, Time must be syncrhonized using NTP
     # Method: https://www.cyberciti.biz/faq/linux-unix-bsd-is-ntp-client-working/
@@ -341,7 +354,7 @@ function SchPrereqNtp() {
 }
 
 #=================================== Check CPU Thread Count ===================================#
-RegisterTest "SchPrereqCPUThreads" "Verify the number of CPU threads meets requirements"
+RegisterTest "SchPrereqCPUThreads" "Verify the number of CPU threads meets requirements" "dpm"
 function SchPrereqCPUThreads() {
     # Per SCH install guide, need at least 8 cores (threads) though 4 is okay for multiple node HA installs.
     # Method: https://www.cyberciti.biz/faq/check-how-many-cpus-are-there-in-linux-system/
@@ -378,7 +391,7 @@ function SchPrereqCPUThreads() {
 }
 
 #=================================== Print Operating System Details ===================================#
-RegisterTest "PrintOSDetails" "Logs system details (Hostname, Kernel, and OS architecture)"
+RegisterTest "PrintOSDetails" "Logs system details (Hostname, Kernel, and OS architecture)" "all"
 function PrintOSDetails() {
     # Log-only function that prints additional information about the runtime environment
     # Possible results:
@@ -396,7 +409,7 @@ function PrintOSDetails() {
 }
 
 #=================================== Print system uptime ===================================#
-RegisterTest "PrintSystemUptime" "Shows how long the host system has been running"
+RegisterTest "PrintSystemUptime" "Shows how long the host system has been running" "all"
 function PrintSystemUptime() {
     # Log-only function that prints the current system runtime
     # Possible results:
@@ -423,7 +436,7 @@ function PrintSystemUptime() {
 }
         
 #=================================== Check for any read-only file systems ===================================#
-RegisterTest "FindReadOnlyFileSystems" "Checks to see if any read-only file systems are mounted in this environment"
+RegisterTest "FindReadOnlyFileSystems" "Checks to see if any read-only file systems are mounted in this environment" "all"
 function FindReadOnlyFileSystems() {
     # Log-only function that prints any read-only file systems
     # Possible results:
@@ -436,7 +449,7 @@ function FindReadOnlyFileSystems() {
 }
 
 #=================================== Check for currently mounted file systems ===================================#
-RegisterTest "FindCurrentlyMountedFileSystems" "List currently mounted file systems"
+RegisterTest "FindCurrentlyMountedFileSystems" "List currently mounted file systems" "all"
 function FindCurrentlyMountedFileSystems() {
     # Log-only function that prints the currently mounted file systems
     # Possible results:
@@ -449,7 +462,7 @@ function FindCurrentlyMountedFileSystems() {
 }
 
 #=================================== Check disk usage on all mounted file systems ===================================#
-RegisterTest "CheckDiskUsage" "List mounted disk usage"
+RegisterTest "CheckDiskUsage" "List mounted disk usage" "all"
 function CheckDiskUsage() {
     # Prints disk usage and generates a warning if the OS is about to run out of disk space
     # Possible results:
@@ -482,7 +495,7 @@ function CheckDiskUsage() {
 }
 
 #=================================== Check for any zombie processes ===================================#
-RegisterTest "FindZombieProcesses" "Look for non-responsive UNIX processes"
+RegisterTest "FindZombieProcesses" "Look for non-responsive UNIX processes" "all"
 function FindZombieProcesses() {
     # Prints any non-responsive UNIX processes
     # Possible results:
@@ -513,7 +526,7 @@ function FindZombieProcesses() {
 }
 
 #=================================== Check for SWAP Utilization ===================================#
-RegisterTest "CheckSwapUtilization" "Check the amount of swap disk usage"
+RegisterTest "CheckSwapUtilization" "Check the amount of swap disk usage" "all"
 function CheckSwapUtilization() {
     # Log-only function that prints the amount of swap space used in the system
     # Possible results:
@@ -530,7 +543,7 @@ function CheckSwapUtilization() {
 }
 
 #=================================== Check for Processor Utilization (current data) ===================================#
-RegisterTest "CheckProcessorUtilization" "Check to see the current CPU usage" "mpstat"
+RegisterTest "CheckProcessorUtilization" "Check to see the current CPU usage" "all" "mpstat"
 function CheckProcessorUtilization() {
     # Log-only function that prints the current CPU usage
     # Possible results:
@@ -580,7 +593,7 @@ function CalcMemorySettings() {
 }
 
 #=================================== Check initial and heap sizes match ===================================#
-RegisterTest "CheckMemorySettingsMatch" "Checks initial and heap sizes match."
+RegisterTest "CheckMemorySettingsMatch" "Checks initial and heap sizes match." "all"
 function CheckMemorySettingsMatch() {
     # Checks to see if the initial and maximum heap sizes match, per industry-standard recommendations
     # Possible results:
@@ -609,7 +622,7 @@ function CheckMemorySettingsMatch() {
 }
 
 #=================================== Check current against min recommended memory ===================================#
-RegisterTest "CheckMinMemory" "Check current against min recommended memory"
+RegisterTest "CheckMinMemory" "Check current against min recommended memory" "all"
 function CheckMinMemory() {
     # Checks to see if the heap memory is at least 8 GB or 16 GB for production systems
     # Production warning can be disabled with the -n flag
@@ -645,7 +658,7 @@ function CheckMinMemory() {
 }
 
 #=================================== Check current against max recommended memory ===================================#
-RegisterTest "CheckMaxMemory" "Check current against max recommended memory"
+RegisterTest "CheckMaxMemory" "Check current against max recommended memory" "all"
 function CheckMaxMemory() {
     # Check to see if more than 64 GB has been allocated. According to some industry literature, garbage collection
     # will begin to become a bottleneck when the heap size is larger than 64 GB, regardless of which GC algorithm is used
@@ -674,7 +687,7 @@ function CheckMaxMemory() {
 }
 
 #=================================== Check % of memory used by StreamSets ===================================#
-RegisterTest "CheckPctOfSysMemory" "Check that % of memory in use by StreamSets is okay." "bc"
+RegisterTest "CheckPctOfSysMemory" "Check that % of memory in use by StreamSets is okay." "all" "bc"
 function CheckPctOfSysMemory() {
     # Check to see if the percentage of heap memory allocated to StreamSets is more than 75% of the total available system memory.
     # We should note that 75% is a heuristic that assumes that the StreamSets application is the only significant application
@@ -718,29 +731,39 @@ function CheckPctOfSysMemory() {
 missing_programs=()
 for c in $(printf '%s\n' "${REQUIRED_PROGRAMS[@]}" | sort -u )
 do
-   # Verify required programs are installed
-   command -v ${c} >/dev/null 2>/dev/null || {
-      missing_programs+=(${c})
-   }
+    # Verify required programs are installed
+    command -v ${c} >/dev/null 2>/dev/null || {
+        missing_programs+=(${c})
+    }
 done
 if [ ${#missing_programs[@]} -ne 0 ]
 then
-   echo ""
-   echo "This script requires these program(s): ${missing_programs[@]}"
-   echo "Please install using your package manager"
-   echo ""
-   exit 1
+    echo ""
+    echo "This script requires these program(s): ${missing_programs[@]}"
+    echo "Please install using your package manager"
+    echo ""
+    exit 1
 fi
 
 # If they specified a list of tests to include then that becomes our list of tests
 if [ ${#TESTS_INCLUDE[@]} -gt 0 ]
 then
-  TESTS_ALL=( ${TESTS_INCLUDE[@]} )
+    TESTS_ALL=( ${TESTS_INCLUDE[@]} )
 fi
+
 # Now remove any tests in TESTS_EXCLUDE
 for del in ${TESTS_EXCLUDE[@]}
 do
-   TESTS_ALL=("${TESTS_ALL[@]/$del}")
+    TESTS_ALL=("${TESTS_ALL[@]/$del}")
+done
+
+# If tests target for a function is not all, add to exclude list if it doesn't match the target product
+for t in ${TESTS_ALL[@]}
+do
+    if [[ "${TESTS_TARGET[${t}]}" != "all" && "${TESTS_TARGET[${t}]}" != "${TARGET_PRODUCT}" ]]
+    then
+        TESTS_ALL=("${TESTS_ALL[@]/$t}")
+    fi
 done
 
 #=================================== Execute functions in TESTS_ALL variable ===================================#
