@@ -10,15 +10,15 @@ v1.0 - Tests required platform minimums, memory settings and available disk spac
 
 Usage:
 
-Usage:health-check.sh (-h|--help) (-u|--user) <svcacct> (-p|--process) <pid> --exclude <functionlist> --include <functionlist> (-n|--no-prod) (-t|--target <targetapp>)
+health-check.sh (-h|--help) (-u|--user) <svcacct> (-p|--process) <pid> --exclude <functionlist> --include <functionlist> (-n|--no-prod) (-t|--target <targetapp>)
 
-Options:
--h | --help                        print this help message and exit
--u | --user <uid>                  optional name of service account running StreamSets as a service (default: sdc)
--p | --pid <pid>                   optional process id. Set when using more than one StreamSets process or if not a service
--n | --no-prod                     set this to turn off certain warnings for non-production environments
--x | --exclude <functionlist>      comma-separated list of functions not to execute
--i | --include <functionlist>      comma-separated list of functions to execute (only execute these functions)
+Options:<br />
+-h | --help                        print this help message and exit<br />
+-u | --user <uid>                  optional name of service account running StreamSets as a service (default: sdc)<br />
+-p | --pid <pid>                   optional process id. Set when using more than one StreamSets process or if not a service<br />
+-n | --no-prod                     set this to turn off certain warnings for non-production environments<br />
+-x | --exclude <functionlist>      comma-separated list of functions not to execute<br />
+-i | --include <functionlist>      comma-separated list of functions to execute (only execute these functions)<br />
 -t | --target <targetproduct>      run product-specific tests (possible values: *sdc*,dpm|sch,transformer|xfm)
 
 Available functions: CheckSupportedOS,CheckJVMVersion,CheckUlimit,PrintOSDetails,PrintSystemUptime,
@@ -29,4 +29,4 @@ CheckMaxMemory,CheckMinSysMemory,CheckPctOfSysMemory
 For more details check the below web link :-
 https://www.simplylinuxfaq.com/2015/05/How-To-Check-Health-Status-Of-Linux-System.html
 
-                                                                    Updated on : 15-Apr-2020
+                                                                    Updated on : 15-June-2020
