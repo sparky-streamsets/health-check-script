@@ -1,5 +1,12 @@
 #!/bin/bash
 
+# health-check.sh - Runs system and process checks to determine if the StreamSets process and the host machine are properly configured
+# Written by Tim Smith and Steve Park 2020-06-11
+#
+# health-check.sh             # Checks StreamSets JVMs and host environment according to published minimum requirements and StreamSets CS best practices
+# ---- TODO - Implement the following
+# call or integrate ssinspect.sh to provide info about all StreamSets processes detected on machine without user specification
+
 # Set defaults and initialize variables
 declare -a TESTS_ALL          # Test functions should add their name to this array
 declare -a TESTS_EXCLUDE      # List of tests that should not be executed
@@ -8,6 +15,7 @@ declare -A TESTS_DESCRIPTION  # Description of test.  Indexed by the test name.
 declare -A TESTS_TARGET       # Capture whether to run a test based on the selected target product
 declare -a REQUIRED_PROGRAMS  # Add any dependencies into this array
 declare -a LOGOUTPUT          # capture string output to be displayed in log file
+declare -a SSPIDFOUND         # Used to determine if a StreamSets process is found for certain memory checks
 TARGET_PRODUCT="sdc"          # Can be sdc, dpm|sch, transformer|xfm  # Tests can use this to know what configurations to test
 NONPROD=false
 OWNER="sdc"
@@ -37,8 +45,8 @@ function HelpFunction
     echo "Usage:$0 (-h|--help) (-u|--user) <svcacct> (-p|--process) <pid> --exclude <functionlist> --include <functionlist> (-n|--no-prod) (-t|--target <targetapp>)"
     echo -e "\n\n\tAvailable functions: CheckSupportedOS,CheckJVMVersion,CheckUlimit,PrintOSDetails,PrintSystemUptime,"
     echo -e "\tFindReadOnlyFileSystems,FindCurrentlyMountedFileSystems,CheckDiskUsage,FindZombieProcesses,"
-    echo -e "\tCheckSwapUtilization,CheckProcessorUtilization,CheckMemorySettingsMatch,CheckMinMemory,"
-    echo -e "\tCheckMaxMemory,CheckPctOfSysMemory"
+    echo -e "\tCheckSwapUtilization,CheckProcessorUtilization,CheckMemorySettingsMatch,CheckMinSysMemory,CheckMinMemory,"
+    echo -e "\tCheckMaxMemory,CheckMinSysMemory,CheckPctOfSysMemory"
     echo -e "\n\nOptions:"
     echo -e "\t-h | --help                        print this help message and exit"
     echo -e "\t-u | --user <uid>                  optional name of service account running StreamSets as a service (default: sdc)"
@@ -171,6 +179,7 @@ function CheckSupportedOS() {
 	local testResult=OK
 	local report="Mac OSX is a supported OS"
 	local logOut
+	local os
     local supportedOS=("CentOS release 6" "CentOS Linux release 7" 
         "Oracle Linux Server release 6" "Oracle Linux Server release 7" 
         "Red Hat Enterprise Linux Server release 6" "Red Hat Enterprise Linux Server release 7" 
@@ -180,8 +189,17 @@ function CheckSupportedOS() {
         logOut=("Mac OSX is a supported OS"
                     "\n \n")
     else
-        local os=`[ -x /usr/bin/lsb_release ] &&  echo -e "Operating System :" $(lsb_release -d|awk -F: '{print $2}'|sed -e 's/^[ \t]*//')  || \
-        echo -e "\nOperating System :" $(cat /etc/system-release)`
+        if [ -f /etc/oracle-release ]
+        then
+            os=`cat /etc/oracle-release | sed 's/\.[0-9]*.*//g'`
+        elif [ -f /etc/redhat-release ]
+        then
+            os=`cat /etc/redhat-release | sed 's/\.[0-9]*.*//g'`
+        elif [ -f /etc/lsb-release ]
+        then
+            os=`cat /etc/lsb-release | grep '^DISTRIB_DESCRIPTION' | awk -F=  '{ print $2 }' | sed 's/"//g' | cut -d. -f 1-2`
+        fi
+        
         local found="false"
         for i in $( echo "$supportedOS")
         do
@@ -420,9 +438,9 @@ function PrintSystemUptime() {
     local sysUptime=""
     
     if [ $? != 0 ]
-        then
-            currUptime=`echo $uptime|grep -w min &> /dev/null` && sysUptime=$(echo -e "System Uptime : "$(echo $uptime|awk '{print $2" by "$3}'|sed -e 's/,.*//g')" minutes") \
-            || sysUptime=`echo -e "System Uptime : "$(echo $uptime|awk '{print $2" by "$3" "$4}'|sed -e 's/,.*//g')" hours"`
+    then
+        currUptime=`echo $uptime|grep -w min &> /dev/null` && sysUptime=$(echo -e "System Uptime : "$(echo $uptime|awk '{print $2" by "$3}'|sed -e 's/,.*//g')" minutes") \
+        || sysUptime=`echo -e "System Uptime : "$(echo $uptime|awk '{print $2" by "$3" "$4}'|sed -e 's/,.*//g')" hours"`
     else
         sysUptime=`echo -e "System Uptime : " $(echo $uptime|awk '{print $2" by "$3" "$4" "$5" hours"}'|sed -e 's/,//g')`
     fi
@@ -479,10 +497,12 @@ function CheckDiskUsage() {
     
     for i in $(echo "$col2"); do
     {
-        if [ $i -ge 95 ]; then
+        if [ $i -ge 95 ]
+        then
             testResult=FAIL 
             report="disk usage exceeds 95%: $(echo $col1 $i)%"
-        elif [[ $i -ge 90 && $i -lt 95 ]]; then
+        elif [[ $i -ge 90 && $i -lt 95 ]]
+        then
             testResult=WARN 
             report="disk usage high (90 - 95%): $(echo $col1 $i)%"
         fi
@@ -507,7 +527,8 @@ function FindZombieProcesses() {
     local logOut
     
     ps -eo stat|grep -w Z 1>&2 > /dev/null
-    if [ $? == 0 ]; then
+    if [ $? == 0 ]
+    then
         testResult=WARN
         report="Zombie processes found on system. Check log for more info."
         logOut=("Number of zombie process on the system are : $(ps -eo stat|grep -w Z|wc -l)"
@@ -559,37 +580,61 @@ function CheckProcessorUtilization() {
 #=================================== Pre-calc memory settings ===================================#
 function CalcMemorySettings() {
     # Helper function that pre-calculates memory usage for specified process
-    if [ -z $PID ]; then
-        STREAMSETS_SDC_XMX="$(ps -f -u $OWNER | grep -Eo 'Xmx[[:digit:]]+(k|K|m|M|g|G|[[:space:]])' | sed 's/Xmx//g')"
+    if [[ $PID ]]
+    then
+        ps -p $PID > /dev/null
+        if [ $? -eq 0 ]
+        then
+            STREAMSETS_SDC_XMX="$(ps -f -p $PID | grep -Eo 'Xmx[[:digit:]]+(k|K|m|M|g|G|[[:space:]])' | sed 's/Xmx//g')"
+        fi
     else
-        STREAMSETS_SDC_XMX="$(ps -f -p $PID | grep -Eo 'Xmx[[:digit:]]+(k|K|m|M|g|G|[[:space:]])' | sed 's/Xmx//g')"
+        getent passwd $OWNER > /dev/null
+        if [ $? -eq 0 ]
+        then
+            STREAMSETS_SDC_XMX="$(ps -f -u $OWNER | grep -Eo 'Xmx[[:digit:]]+(k|K|m|M|g|G|[[:space:]])' | sed 's/Xmx//g')"
+        fi
     fi
-    MULTIPLE=1
-    if [[ "$STREAMSETS_SDC_XMX" =~ (k|K)$ ]]; then
-        MULTIPLE=2**10
-    elif [[ "$STREAMSETS_SDC_XMX" =~ (m|M)$ ]]; then
-        MULTIPLE=2**20
-    elif [[ "$STREAMSETS_SDC_XMX" =~ (g|G)$ ]]; then
-        MULTIPLE=2**30
-    fi
-    STREAMSETS_SDC_RAW_XMX="$(echo $STREAMSETS_SDC_XMX | tr -d '[:space:]' | tr -d '[:alpha:]')"
-    STREAMSETS_SDC_RAW_XMX=$(echo $((STREAMSETS_SDC_RAW_XMX * MULTIPLE)))
 
-    if [ -z $PID ]; then
-        STREAMSETS_SDC_XMS="$(ps -f -u $OWNER | grep -Eo 'Xms[[:digit:]]+(k|K|m|M|g|G|[[:space:]])' | sed 's/Xms//g')"
+    if [[ ${STREAMSETS_SDC_XMX+x} ]]
+    then
+        SSPIDFOUND=1
+    
+        MULTIPLE=1
+        if [[ "$STREAMSETS_SDC_XMX" =~ (k|K)$ ]]
+        then
+            MULTIPLE=2**10
+        elif [[ "$STREAMSETS_SDC_XMX" =~ (m|M)$ ]]
+        then
+            MULTIPLE=2**20
+        elif [[ "$STREAMSETS_SDC_XMX" =~ (g|G)$ ]]
+        then
+            MULTIPLE=2**30
+        fi
+        STREAMSETS_SDC_RAW_XMX="$(echo $STREAMSETS_SDC_XMX | tr -d '[:space:]' | tr -d '[:alpha:]')"
+        STREAMSETS_SDC_RAW_XMX=$(echo $((STREAMSETS_SDC_RAW_XMX * MULTIPLE)))
+
+        if [ -z $PID ]
+        then
+            STREAMSETS_SDC_XMS="$(ps -f -u $OWNER | grep -Eo 'Xms[[:digit:]]+(k|K|m|M|g|G|[[:space:]])' | sed 's/Xms//g')"
+        else
+            STREAMSETS_SDC_XMS="$(ps -f -p $PID | grep -Eo 'Xmx[[:digit:]]+(k|K|m|M|g|G|[[:space:]])' | sed 's/Xmx//g')"
+        fi
+        MULTIPLE=1
+        if [[ "$STREAMSETS_SDC_XMS" =~ (k|K)$ ]]
+        then
+            MULTIPLE=2**10
+        elif [[ "$STREAMSETS_SDC_XMS" =~ (m|M)$ ]]
+        then
+            MULTIPLE=2**20
+        elif [[ "$STREAMSETS_SDC_XMS" =~ (g|G)$ ]]
+        then
+            MULTIPLE=2**30
+        fi
+        STREAMSETS_SDC_RAW_XMS="$(echo $STREAMSETS_SDC_XMS | tr -d '[:space:]' | tr -d '[:alpha:]')"
+        STREAMSETS_SDC_RAW_XMS=$(echo $((STREAMSETS_SDC_RAW_XMS * MULTIPLE)))
     else
-        STREAMSETS_SDC_XMS="$(ps -f -p $PID | grep -Eo 'Xmx[[:digit:]]+(k|K|m|M|g|G|[[:space:]])' | sed 's/Xmx//g')"
+        SSPIDFOUND=0
     fi
-    MULTIPLE=1
-    if [[ "$STREAMSETS_SDC_XMS" =~ (k|K)$ ]]; then
-        MULTIPLE=2**10
-    elif [[ "$STREAMSETS_SDC_XMS" =~ (m|M)$ ]]; then
-        MULTIPLE=2**20
-    elif [[ "$STREAMSETS_SDC_XMS" =~ (g|G)$ ]]; then
-        MULTIPLE=2**30
-    fi
-    STREAMSETS_SDC_RAW_XMS="$(echo $STREAMSETS_SDC_XMS | tr -d '[:space:]' | tr -d '[:alpha:]')"
-    STREAMSETS_SDC_RAW_XMS=$(echo $((STREAMSETS_SDC_RAW_XMS * MULTIPLE)))
 }
 
 #=================================== Check initial and heap sizes match ===================================#
@@ -600,13 +645,24 @@ function CheckMemorySettingsMatch() {
     # WARN: initial and maximum heap sizes do not match
     # OK: initial and maximum heap sizes match
     
-	CalcMemorySettings
+    if [ -z "$SSPIDFOUND" ]
+    then
+	    CalcMemorySettings
+	fi
 	
 	local testResult=OK
 	local report="Current Initial and Maximum heap sizes match. Xms: $STREAMSETS_SDC_XMS    Xmx: $STREAMSETS_SDC_XMX"
 	local logOut
 	
-    if [ $STREAMSETS_SDC_RAW_XMS -ne $STREAMSETS_SDC_RAW_XMX ]; then
+    if [ $SSPIDFOUND -eq 0 ]
+    then
+        testResult=INFO
+        report="No StreamSets Process found. Test is disabled"
+        logOut=("No StreamSets process found. Specify either the user or pid flags. To find a StreamSets pid,"
+            "\nexecute the ssinspect.sh script"
+            "\n \n")
+    elif [ $STREAMSETS_SDC_RAW_XMS -ne $STREAMSETS_SDC_RAW_XMX ]
+    then
         testResult=WARN 
         report="Initial and maximum heap sizes different. Xms: $STREAMSETS_SDC_XMS    Xmx: $STREAMSETS_SDC_XMX"
         logOut=("StreamSets recommends following the industry-standard best practice of setting the"
@@ -631,19 +687,31 @@ function CheckMinMemory() {
     # WARN: Heap memory is below 16 GB for production systems (can be disabled)
     # OK: At least 8 GB (non-prod) or 16 GB (prod) heap space has been allocated
     
-    CalcMemorySettings
+    if [ -z "$SSPIDFOUND" ]
+    then
+        CalcMemorySettings
+    fi
     
     local testResult=INFO
     local report="Heap memory at or over recommended minimums. Xmx: $STREAMSETS_SDC_XMX"
     local logOut
 
-    if [ $STREAMSETS_SDC_RAW_XMX -lt 8589934592 ]; then
+    if [ $SSPIDFOUND -eq 0 ]
+    then
+        testResult=INFO
+        report="No StreamSets Process found. Test is disabled"
+        logOut=("No StreamSets process found. Specify either the user or pid flags. To find a StreamSets pid,"
+            "\nexecute the ssinspect.sh script"
+            "\n \n")
+    elif [ $STREAMSETS_SDC_RAW_XMX -lt 8589934592 ]
+    then
         testResult=FAIL 
         report="At least 8 GB of heap memory required. Xmx: $STREAMSETS_SDC_XMX"
         logOut=("StreamSets recommends at least 8 GB of heap memory available for both production and non-production"
             "\nenvironments: Current Xmx: $STREAMSETS_SDC_XMX"
             "\n \n")
-    elif [[ $STREAMSETS_SDC_RAW_XMX -lt 17179869184 && -z "$NONPROD" ]]; then
+    elif [[ $STREAMSETS_SDC_RAW_XMX -lt 17179869184 && -z "$NONPROD" ]]
+    then
         testResult=WARN 
         report="At least 16 GB of heap memory required for production. Xmx: $STREAMSETS_SDC_XMX"
         logOut=("StreamSets recommends at least 16 GB of heap memory available for production environments."
@@ -666,22 +734,79 @@ function CheckMaxMemory() {
     # ERROR: More than 64 GB heap space detected
     # OK: Less than 64 GB heap space detected
     
-    CalcMemorySettings
+    if [ -z "$SSPIDFOUND" ]
+    then
+        CalcMemorySettings
+    fi
     
     local testResult=OK
     local report="Heap memory under 64 GB limit. Xmx: $STREAMSETS_SDC_XMX"
     local logOut
-
-    if [ $STREAMSETS_SDC_RAW_XMX -ge 68719476736 ]; then
+    
+    if [ $SSPIDFOUND -eq 0 ]
+    then
+        testResult=INFO
+        report="No StreamSets Process found. Test is disabled"
+        logOut=("No StreamSets process found. Specify either the user or pid flags. To find a StreamSets pid,"
+            "\nexecute the ssinspect.sh script"
+            "\n \n")
+    elif [ $STREAMSETS_SDC_RAW_XMX -ge 68719476736 ]; then
         testResult=ERROR 
         report="64 GB max heap memory exceeded. Xmx: $STREAMSETS_SDC_XMX" 
         logOut=("StreamSets recommends no more than 64 GB of heap memory be available. Requiring more memory is often an"
-            "\nindicator that the SDC has reached its carrying capacity. Current Xmx: $STREAMSETS_SDC_XMX"
+            "\nindicator that the Data Collector has reached its carrying capacity. Current Xmx: $STREAMSETS_SDC_XMX"
             "\n \n")
     else
         logOut=("Available memory is not excessive (i.e. > 64 GB). Current Xmx: $STREAMSETS_SDC_XMX"
             "\n \n")
     fi
+    
+    ResultOutput $testResult "${report}" logOut[@]
+}
+
+#=================================== Check min system memory ===================================#
+RegisterTest "CheckMinSysMemory" "Ensure there is enough system memory available." "all" "bc"
+function CheckMinSysMemory() {
+    local sysmem="$(awk '/MemTotal/ { printf "%.0f \n", $2*1024 }' /proc/meminfo)"
+    local sysmemInGB="$(awk '/MemTotal/ { printf "%.0f \n", $2/1024/1024 }' /proc/meminfo)"
+    local oneGBinBytes=1073741824
+	local testResult=OK
+    local report="Available system memory sufficient to run either Data Collector or Transformer. System: ${sysmemInGB}g"
+    local logOut=("StreamSets requires at a minimum 8 GB of system memory to run Control Hub as part of an HA"
+        "\nconfiguration or 15 GB of system memory to run standalone. Total system memory: ${sysmemInGB}g"
+        "\n \n")
+    
+    if [ ${TARGET_PRODUCT} == 'dpm' ]
+    then
+        local dpmHAMin=`echo $(($oneGBinBytes*8))`
+        local dpmNonHAMin=`echo $(($oneGBinBytes*15))`
+        if [ $sysmem -lt $dpmHAMin ]
+        then
+            testResult=FAIL
+            report="Available system memory not sufficent to run Control Hub. System: ${sysmemInGB}g"
+        elif [[ $sysmem -ge $dpmHAMin && $sysmem -lt $dpmNonHAMin ]]
+        then
+            testResult=WARN
+            report="Available system memory sufficient to run Control Hub in HA but not standalone. System: ${sysmemInGB}g"
+        else
+            report="Available system memory sufficient to run Control Hub in either standalone or HA configuration. System: ${sysmemInGB}g"
+        fi
+    elif [ $sysmem -lt $oneGBinBytes ]
+    then
+        testResult=FAIL
+        report="Available system memory not sufficent to run Data Collector or Transformer. System: ${sysmemInGB}g"
+        logOut=("StreamSets requires at a minimum 1 GB of system memory for either Data Collector or Transformer."
+            "\nHowever, for most purposes, we advise having substantially more available. We usually recommend" 
+            "\nat least 12 GB for development systems and 22 GB for production, assuming the Data Collector"
+            "\nor Transformer is the only application running. Total system memory: ${sysmemInGB}g"
+            "\n \n")
+    else
+        logOut=("StreamSets requires at a minimum 1 GB of system memory for either Data Collector or Transformer."
+            "\nHowever, for most purposes, we advise having substantially more available. We usually recommend" 
+            "\nat least 12 GB for development systems and 22 GB for production, assuming the Data Collector"
+            "\nor Transformer is the only application running. Total system memory: ${sysmemInGB}g"
+            "\n \n")
+    fi     
     
     ResultOutput $testResult "${report}" logOut[@]
 }
@@ -697,27 +822,41 @@ function CheckPctOfSysMemory() {
     # WARN: More than 75% of available system memory allocated to StreamSets
     # OK: StreamSets consumes less than 75% of available system memory
     
-    CalcMemorySettings
+    if [ -z "$SSPIDFOUND" ]
+    then
+        CalcMemorySettings
+    fi
     
     local testResult=OK
     local report=""
     local logOut
-    local sysmem="$(awk '/MemTotal/ { printf "%.0f \n", $2*1024 }' /proc/meminfo)"
-    local sysmemInGB="$(awk '/MemTotal/ { printf "%.0f \n", $2/1024/1024 }' /proc/meminfo)"
-    local pctOfSysmem="$(echo $STREAMSETS_SDC_RAW_XMX/$sysmem |bc -l)"
-    pctOfSysmem=$(echo $pctOfSysmem*100 | bc -l)
-    pctOfSysmem=$(printf %0.f $pctOfSysmem)
-    if [ $pctOfSysmem -gt 75 ]; then
-        testResult=WARN 
-        report="Heap memory exceeds 75% of system memory. Xmx: $STREAMSETS_SDC_XMX    System: ${sysmemInGB}g"
-        logOut=("StreamSets recommends that the heap size setting be no larger than 75% of"
-            "\nthe available system memory.Current Xmx: $STREAMSETS_SDC_XMX   Total system memory: ${sysmemInGB}g"
+    
+    if [ $SSPIDFOUND -eq 0 ]
+    then
+        testResult=INFO
+        report="No StreamSets Process found. Test is disabled"
+        logOut=("No StreamSets process found. Specify either the user or pid flags. To find a StreamSets pid,"
+            "\nexecute the ssinspect.sh script"
             "\n \n")
-    else
-    	report="Heap memory under 75% of system memory. Xmx: $STREAMSETS_SDC_XMX    System: ${sysmemInGB}g"
-        logOut=("Available heap memory is below 75% of total system memory."
-            "Current Xmx: $STREAMSETS_SDC_XMX   Total system memory: ${sysmemInGB}g"
-            "\n \n")
+    else 
+        local sysmem="$(awk '/MemTotal/ { printf "%.0f \n", $2*1024 }' /proc/meminfo)"
+        local sysmemInGB="$(awk '/MemTotal/ { printf "%.0f \n", $2/1024/1024 }' /proc/meminfo)"
+        local pctOfSysmem="$(echo $STREAMSETS_SDC_RAW_XMX/$sysmem |bc -l)"
+        pctOfSysmem=$(echo $pctOfSysmem*100 | bc -l)
+        pctOfSysmem=$(printf %0.f $pctOfSysmem)
+        
+        if [ $pctOfSysmem -gt 75 ]; then
+            testResult=WARN 
+            report="Heap memory exceeds 75% of system memory. Xmx: $STREAMSETS_SDC_XMX    System: ${sysmemInGB}g"
+            logOut=("StreamSets recommends that the heap size setting be no larger than 75% of"
+                "\nthe available system memory. Current Xmx: $STREAMSETS_SDC_XMX   Total system memory: ${sysmemInGB}g"
+                "\n \n")
+        else
+    	    report="Heap memory under 75% of system memory. Xmx: $STREAMSETS_SDC_XMX    System: ${sysmemInGB}g"
+            logOut=("Available heap memory is below 75% of total system memory."
+                "Current Xmx: $STREAMSETS_SDC_XMX   Total system memory: ${sysmemInGB}g"
+                "\n \n")
+        fi
     fi
     
     ResultOutput $testResult "${report}" logOut[@]
