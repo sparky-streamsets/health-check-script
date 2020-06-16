@@ -1,4 +1,4 @@
- [OK  ]  CheckSupportedOS Operating System : Ubuntu 16.04.6 LTS is a supported OS
+ [OK  ]  CheckSupportedOS Ubuntu 16.04 is a supported OS
  [OK  ]  CheckJVMVersion StreamSets-recommended OpenJDK 8 installed and available
  [OK  ]  CheckUlimit Hard and soft open file limit setting is correct
  [OK  ]  CheckDiskUsage disk usage under 90%: /dev/xvda1 / 6%
@@ -6,4 +6,5 @@
  [OK  ]  CheckMemorySettingsMatch Current Initial and Maximum heap sizes match. Xms: 512m    Xmx: 512m
  [FAIL]  CheckMinMemory At least 8 GB of heap memory required. Xmx: 512m
  [OK  ]  CheckMaxMemory Heap memory under 64 GB limit. Xmx: 512m
+ [FAIL]  CheckMinSysMemory Available system memory not sufficent to run Data Collector or Transformer. System: 1 g
  [OK  ]  CheckPctOfSysMemory Heap memory under 75% of system memory. Xmx: 512m    System: 1 g
